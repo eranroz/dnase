@@ -6,9 +6,9 @@ Markov Models for learning the chromatin organization.
 # Features
 * Discrete and continuous Hidden Markov Model
 * Score functions to evaluate genome segmentation, based on different assumptions:
-** enrichment of regions
-** consistency between different samples
-** gene breaks - number of genes that fall between two domains
+ * enrichment of regions
+ * consistency between different samples
+ * gene breaks - number of genes that fall between two domains
 * Various script for download, transform and integration of data from different source
 
 # Installation and usage
@@ -16,23 +16,23 @@ The project is written in python 3, with some cython and c in critical code path
 
 Installation:
 * Clone the repository
-* pyx - compile using
+* pyx - compile using the following command:
 > python setup.py build_ext --inplace
 
-* Fill directories with specfic project data/external dependencies:
-** data - Create data directory with your data. Recommended public data repository: http://www.ncbi.nlm.nih.gov/epigenomics
-** bin - fill with UCSC Executables such as bedToBigBed, bigWigToBedGraph and wigToBigWig. (can be downloaded for example from http://hgdownload.cse.ucsc.edu/admin/exe/ )
-** results - create a directory for storing results
+* Fill directories with specific project data/external dependencies:
+ * data - Create data directory with your data. Recommended public data repository: http://www.ncbi.nlm.nih.gov/epigenomics
+ * bin - fill with UCSC programs such as bedToBigBed, bigWigToBedGraph and wigToBigWig. (can be downloaded for example from http://hgdownload.cse.ucsc.edu/admin/exe/ )
+ * results - create a directory for storing results
 
-Data directory as well as results directories may require large disk space, and you may find it convenient to store data or results directories outside a shortcuts. See also [Installation FAQ](installFaq)
+Data directory as well as results directories may require large disk space, and you may find it convenient to store data or results directories outside a shortcuts. See also [Installation FAQ](#installFaq)
 
 ## Usage
 >~"Use the source, Luke" (Obi-Wan Kenobi)
 
 You are welcome to use the source and extend it. Some common tasks are provided as command line tools:
 * data_provider directory
-** dataDownloader - Script for downloading and transforming data.
-** createMeanMarkers - Script for averaging different samples from same experiment/same cell type
+* * dataDownloader - Script for downloading and transforming data.
+* * createMeanMarkers - Script for averaging different samples from same experiment/same cell type
 * dnase_classify - train and classify chromatin to regions of open and closed
 # <a name="installFaq"></a>Installation FAQ
 Here I keep some annoying problems I encountered and their solutions. You are welcome to suggest more :)
