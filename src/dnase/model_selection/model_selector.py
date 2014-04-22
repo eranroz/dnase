@@ -19,12 +19,13 @@ The possible score functions are as follows:
 """
 import os
 import argparse
+
 import numpy as np
-from config import PUBLISH_DIR, DATA_DIR
+
+from config import DATA_DIR
 from data_provider.DiscreteTransformer import DiscreteTransformer
 from dnase.HMMClassifier import HMMClassifier
 from dnase.model_selection.ConsistencyScorer import ConsistencyScorer
-from dnase.model_selection.BoundaryEnrichment import CTCFModelScore
 from dnase.model_selection.MarkerEnrichmentScorer import MarkerEnrichmentScorer
 from hmm.HMMModel import DiscreteHMM, ContinuousHMM
 from hmm.bwiter import bw_iter, IteratorCondition
@@ -136,7 +137,7 @@ def score_hmt(training_dir, ctcf_scorer, genes_scorer):
     print('Finished printing')
 
 
-def eval_res(training_dir, res, score_functions=None):
+def evaluate_resolution(training_dir, res, score_functions=None):
     """
     Evaluates model in specific resolution with different parameters and constraints
     @param training_dir: directory with Dnase signal samples from same cell type
@@ -248,77 +249,86 @@ def grid_search_models(train_cell_type, use_multiprocessing=False):
         from multiprocessing import Pool
         from functools import partial
 
-        eval_res_core = partial(eval_res, training_dir=train_dir, score_functions=score_functions)
+        eval_res_core = partial(evaluate_resolution, training_dir=train_dir, score_functions=score_functions)
         pool_process = Pool()
         for res_i, res in enumerate(pool_process.map(eval_res_core, _RESOLUTIONS)):
             scores_matrix[res_i, :] = res
     else:
         for res_i, res in enumerate(_RESOLUTIONS):
             print('res: %i' % res)
-            scores_matrix[res_i, :] = eval_res(training_dir=train_dir, res=res,
+            scores_matrix[res_i, :] = evaluate_resolution(training_dir=train_dir, res=res,
                                                score_functions=score_functions)
 
     print('Finished')
     # p, k27 average, consistency
-    np.save(os.path.join(RES_DIR, 'modelEvaluation', 'gridSearchScoreConsistency-%s' % (','.join(score_types))),
+    np.save(os.path.join(RES_DIR, 'modelEvaluation', 'gridSearchScore-%s' % (','.join(score_types))),
             scores_matrix)
-
-
-def printCTCF():
-    scorer = CTCFModelScore(20)
-    gold = scorer.golden_model
-    with open(os.path.join(PUBLISH_DIR, "ctcfSeg.bg"), 'w') as ctcfSeg:
-        #print("track type=bedGraph", file=ctcfSeg)
-        val = 1
-        for seg in gold:
-            print("%s\t%i %i %i" % (SCORE_CHROMOSOME, seg[0], seg[0] + seg[1], val), file=ctcfSeg)
-            val = (val + 1) % 2
-    print('Finished')
-    #SeqLoader.build_bedgraph(classified_seq, resolution=20, output_file=file_name)
-
-
-def showGrid():
-    scores_matrix = np.load(os.path.join(RES_DIR, 'modelEvaluation', 'gridSearchScore.npy'))
-    score_types = ['p', 'ctcf', 'genes']
-    np.set_printoptions(precision=3)
-    for res_i, res in enumerate(_RESOLUTIONS):
-        #scores_matrix = np.zeros((len(_MODEL_TYPES), len(_ALPHAS_OPENED), len(score_types)))
-
-        print('Resolution: %i' % res)
-        discrete = scores_matrix[res_i, 0, :]
-        continous = scores_matrix[res_i, 1, :]
-
-        print('ALPHA/scores\tP\tCTCF\tgenes')
-        print('discrete')
-        print(np.column_stack([_ALPHAS_OPENED, discrete]))
-        print('continous')
-        print(np.column_stack([_ALPHAS_OPENED, continous]))
-        #continous = scores_matrix[res_i, 0, :]
 
 
 def show_grid_search():
     global _RESOLUTIONS, _MODEL_TYPES, _ALPHAS_OPENED
     import matplotlib.pyplot as plt
 
-    score_types = ['p', 'mean_k27_enrichment', 'consistent']
-    scores_matrix = np.load(os.path.join(RES_DIR, 'modelEvaluation', 'gridSearchScoreConsistency.npy'))
+    score_types = ['p', 'k27ac_enrichment', 'H3K27me3 enrichment', 'H3K36me3 enrichment', 'consistent']
+    scores_matrix = np.load(
+        os.path.join(RES_DIR, 'modelEvaluation', 'gridSearchScore-%s.npy' % (','.join(score_types))))
 
+    selected_scores = ['consistent', 'k27ac_enrichment']
+    selected_score_indics = [score_types.index(score) for score in selected_scores]
     fig, ax = plt.subplots()
     for model_i, model in enumerate(_MODEL_TYPES):
         data = []
         labels = []
         for res_i, res in enumerate(_RESOLUTIONS):
             for alpha_i, alpha in enumerate(_ALPHAS_OPENED):
-                data.append(scores_matrix[res_i, model_i, alpha_i, 1:])
-                labels.append('%i-α%f' % (res, alpha))
-        data = np.array(data)
+                data.append(scores_matrix[res_i, model_i, alpha_i, selected_score_indics])
+                labels.append((res, alpha_i))
 
+        # filter close points
+        data = np.array(data)
+        labels = np.array(labels)
+        keep = np.ones(data.shape[0], dtype=bool)
+        for p_data, p_label in zip(data, labels):
+            curr = np.all(labels == p_label, 1)
+            if not keep[curr]:
+                continue
+            same_res = (labels[:, 0] == p_label[0]) & ~np.all(labels == p_label, 1)
+            if np.all(np.abs(data[same_res, :]-p_data) < [0.5, 0.01]):
+                #data = data[~same_res, :]
+                #labels = labels[~same_res, :]
+                keep[same_res & ~curr] = False
+
+        labels = labels[keep]
+        data = data[keep]
+        """
+        labels = np.array(labels)
+        n_labels = []
+        curr_deleted = []
+        for p_i, tup in enumerate(zip(data, labels)):
+            p_v, p_labels = tup
+            if p_i in curr_deleted:
+                continue
+            dist_scores = np.array([np.abs(p_vo-p_v) for i, p_vo in data])
+            curr_points = [i for i in range(0, data.shape[0]) if i not in curr_deleted]
+            threshold = np.maximum(dist_scores[curr_points].mean(axis=0)*0.3, 0.01)
+            dist_labels = np.array([np.abs(p_labels-p_vo)[0] for p_vo in labels])
+            del_items = np.where((dist_labels == 0) & np.all(dist_scores < threshold, 1))[0]
+            curr_deleted = curr_deleted + del_items.tolist()
+            if len(del_items) > 1: # == len(_ALPHAS_OPENED)
+                n_labels.append('%i' % p_labels[0])
+            else:
+                n_labels.append('%i-a%i' % (p_labels[0], _ALPHAS_OPENED.index(p_labels[1])))
+
+        data = data[np.arange(0, data.shape[0]) != curr_deleted]
+        labels = n_labels
+        """
+        labels = ['%i,a%i' % tuple(l) for l in labels]
         ax.scatter(data[:, 0], data[:, 1], label=model, c='rb'[model_i])
         for i, txt in enumerate(labels):
-            ax.annotate(txt, data[i, :], rotation=15 * (-1 if model_i == 0 else 1), size=10)
+            ax.annotate(txt, data[i, :], size='xx-small')#, size=10, , rotation=15 * (-1 if model_i == 0 else 1)
     plt.legend()
-    plt.xlabel('k27Enrichment')
-    plt.ylabel('Consistent')
+    plt.xlabel(selected_scores[0])
+    plt.ylabel(selected_scores[1])
     plt.title('Model evaluation for different models')
     resolutions = ','.join([str(s) for s in _RESOLUTIONS])
     alphas = ','.join([str(s) for s in _ALPHAS_OPENED])
@@ -346,8 +356,6 @@ def profile_model_select():
 
 
 if __name__ == "__main__":
-    #import cProfile
-    #cProfile.run('profile_model_select()')
 
     commands = {
         'gridSearch': grid_search_models,

@@ -407,7 +407,7 @@ def load_dict(name, resolution=20, transform=None, directory=DATA_DIR, chromosom
         seq = sequence_dict[key]
         logging.debug('Preparing %s' % key)
         if resolution != orig_resolution:  # Down-sample sequence
-            seq = down_sample(seq, resolution / orig_resolution)
+            seq = down_sample(seq, resolution / orig_resolution)  # TODO: would be nice to create lazy evaluated
         if transform is not None:
             seq = transform(seq)
         res_dict[key] = seq

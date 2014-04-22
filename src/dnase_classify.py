@@ -6,9 +6,10 @@ import os
 import datetime
 
 from config import BED_GRAPH_RESULTS_DIR
-from data_provider.DiscreteTransformer import DiscreteTransformer
-from dnase.DNaseClassifier import DNaseClassifier
+import data_provider.DiscreteTransformer
+from dnase import dnase_classifier
 from dnase.HMMClassifier import HMMClassifier
+from dnase.dnase_classifier import DNaseClassifier
 from hmm.HMMModel import DiscreteHMM, ContinuousHMM
 
 
@@ -74,11 +75,11 @@ def classify_continuous(in_file='UW.Fetal_Brain.ChromatinAccessibility.H-22510.D
     class_mode = 'posterior' if output_p else 'viterbi'
     for classified_seq in classifier.classify([training]):
         file_name = os.path.join(BED_GRAPH_RESULTS_DIR,
-                                 '%s.Continous%s.%s.bg' % (out_file or in_file, str(resolution), class_mode))
+                                 '%s.Continous%i.%s.bg' % (out_file or in_file, resolution, class_mode))
         npz_filename = os.path.join(BED_GRAPH_RESULTS_DIR,
-                                    '%s.Continous%s.%s.npz' % (out_file or in_file, str(resolution), class_mode))
+                                    '%s.Continous%i.%s.npz' % (out_file or in_file, resolution, class_mode))
         raw_file = os.path.join(BED_GRAPH_RESULTS_DIR,
-                                '%s.%s.rawContinous.bg' % (in_file, str(resolution)))
+                                '%s.%i.rawContinous.bg' % (in_file, resolution))
         print('Writing result file (bg format)')
         SeqLoader.build_bedgraph(classified_seq, resolution=resolution, output_file=file_name)
         print('Writing result file (pkl format)')
@@ -110,14 +111,14 @@ def classify_discrete(in_file='UW.Fetal_Brain.ChromatinAccessibility.H-22510.DS1
 
     print('Loading data')
     training = SeqLoader.load_dict(in_file, resolution,
-                                   DiscreteTransformer())
+                                   data_provider.DiscreteTransformer())
     print('Creating model')
 
     model = DiscreteHMM(state_transition, emission, min_alpha=min_alpha)
     strategy = HMMClassifier(model)
     strategy.output_p = output_p
     #strategy.trainChm = ['chr1']
-    classifier = DNaseClassifier(strategy)
+    classifier = dnase_classifier.DNaseClassifier(strategy)
     print('Training model')
     model_name = os.path.join(BED_GRAPH_RESULTS_DIR,
                               '%s.Discrete%s.model' % (model_name or in_file, str(resolution)))
@@ -175,11 +176,13 @@ if __name__ == "__main__":
     python3 -m dnase_classify --posterior --resolution 1000 UW.Fetal_Brain.ChromatinAccessibility.H-22510.DS11872
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument('infile', help="input file, included in the pickled data directory")
+    parser.add_argument('infile', help="input file, included in the data directory")
     parser.add_argument('--posterior', help="use this option to output posterior probabilities instead of states",
                         action="store_true")
-    parser.add_argument('--resolution', help="resolution to use for classification", type=int, default=20)
+    parser.add_argument('--resolution', help="resolution to use for classification", type=int, default=500)
     parser.add_argument('--model', help="model file to be used")
+    parser.add_argument('--model_type', help="Model type: discrete (d) or continuous (c)", type=str,
+                        default='continuous')
     parser.add_argument('--min_alpha', help="Prior for transition probabilities", type=float, default=None)
     parser.add_argument('--min_alpha_open', help="Prior for transition probabilities", type=float, default=None)
     parser.add_argument('--min_alpha_closed', help="Prior for transition probabilities", type=float, default=None)
@@ -187,10 +190,30 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print('Args')
     print(args)
-    resolution = args.resolution
-    if args.min_alpha or (args.min_alpha_open and args.min_alpha_closed):
-        min_alpha = np.array([args.min_alpha_closed or args.min_alpha, args.min_alpha_open or args.min_alpha])
 
-    classify_continuous(in_file=args.infile, output_p=args.posterior, model_name=args.model, out_file=args.output)
-    classify_discrete(in_file=args.infile, output_p=args.posterior, model_name=args.model, out_file=args.output)
+    resolution = args.resolution
+
+    if args.min_alpha is not None or (args.min_alpha_open is not None and args.min_alpha_closed is not None):
+        min_alpha = np.array([
+            args.min_alpha_closed if args.min_alpha_closed is not None else args.min_alpha,
+            args.min_alpha_open if args.min_alpha_open is not None else args.min_alpha
+        ])
+
+    model_name = args.model
+    output_path = args.output or os.path.basename(args.infile)
+    if model_name is None or not dnase_classifier.model_exist(model_name):
+        is_discrete = args.model_type[0].upper() == 'D'
+        if model_name is None:
+            model_name = '%s%i-a[%.3f, %3f]' % ('Discrete' if is_discrete else 'Continuous', resolution, min_alpha[0], min_alpha[1])
+        strategy = HMMClassifier.default(is_discrete, min_alpha)
+        strategy.output_p = args.posterior  # viterbi or posterior
+        classifier = dnase_classifier.DNaseClassifier(strategy, resolution, model_name)
+        classifier.fit_file(args.infile)
+        classifier.save()  # create directory for the model
+    else:
+        classifier = dnase_classifier.load(model_name)
+    classifier.classify_file(args.infile, output_path)
+
+    #classify_continuous(in_file=args.infile, output_p=args.posterior, model_name=args.model, out_file=args.output)
+    #classify_discrete(in_file=args.infile, output_p=args.posterior, model_name=args.model, out_file=args.output)
     print('Finished')

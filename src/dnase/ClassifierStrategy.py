@@ -26,3 +26,10 @@ class ClassifierStrategy:
         @param sequence: sequence to classify
         """
         pass
+
+    @abstractmethod
+    def data_transform(self):
+        """
+        Get data transformer for transforming raw data before classify or fit
+        """
+        pass

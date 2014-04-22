@@ -30,3 +30,17 @@ class MultivariateNormal():
         """
         maha = np.sum(np.square(np.dot(x - self.mean, self.prec_U)), axis=-1)
         return np.exp(-0.5 * (self.norm_p + maha))
+
+
+def test_mtuidim_hmm():
+    from matplotlib.pylab import plt
+    x, y = np.mgrid[-1:1:.1, -1:1:.1]
+    pos = np.array([x.ravel(), y.ravel()])
+    rv = MultivariateNormal([0.5, -0.2], [[2.0, 0.3], [0.3, 0.5]])
+    z = rv.pdf(pos.T)
+
+    plt.contourf(x, y, z.reshape((20, 20)))
+    plt.show()
+
+if __name__ == "__main__":
+    test_mtuidim_hmm()

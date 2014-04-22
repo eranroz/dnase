@@ -1,9 +1,10 @@
 """
 Classifies the genome using HMM model.
 """
-
+import numpy as np
+import data_provider
 from dnase.ClassifierStrategy import ClassifierStrategy
-from hmm.HMMModel import HMMModel
+from hmm.HMMModel import HMMModel, ContinuousHMM, DiscreteHMM
 from hmm.bwiter import bw_iter, IteratorCondition
 
 __author__ = 'eranroz'
@@ -77,3 +78,58 @@ class HMMClassifier(ClassifierStrategy):
                 classified[chromosome] = self.model.viterbi(sequence)
 
         return classified
+
+    @staticmethod
+    def default(discrete=False, min_alpha=0):
+        """
+        Creates hmm classifier with default model
+        @param min_alpha: constraint on minimum self transition in EM
+        @param discrete: whether to sue discrete or continuous HMM
+        @return: {HMMClassifier} with default model
+        """
+        if discrete:
+            state_transition = np.array(
+                [
+                    [0.0, 0.9, 0.1],  # begin
+                    [0.7, 0.99, 0.01],  # closed (very small change to get to open)
+                    [0.3, 0.1, 0.9],  # open (may go to close but prefers to keep the state)
+                ]
+            )
+            emission = np.array([
+                np.zeros(4),
+                [0.8, 0.1, 0.09, 0.01],  # closed - prefers low values
+                [0.02, 0.4, 0.5, 0.08]  # open - prefers high values
+            ])
+
+            print('Loading data')
+            model = DiscreteHMM(state_transition, emission, min_alpha=min_alpha)
+            strategy = HMMClassifier(model)
+        else:
+            state_transition = np.array(
+                [
+                    [0.0, 0.9, 0.1],  # begin
+                    [0.7, 0.99, 0.01],  # closed (very small change to get to open)
+                    [0.3, 0.1, 0.9]  # open (may go to close but prefers to keep the state)
+                ]
+            )
+            emission = np.array([
+                [0, 1],
+                [0, 1],  # closed - guess mean almost 0
+                [2, 2.5]  # open - more variable
+            ])
+
+            model = ContinuousHMM(state_transition, emission, min_alpha=min_alpha)
+            strategy = HMMClassifier(model)
+        return strategy
+
+    def data_transform(self):
+        """
+        Get data transformer for transforming raw data before classify or fit
+        """
+        if isinstance(self.model, DiscreteHMM):
+            transformer = data_provider.DiscreteTransformer()
+        elif isinstance(self.model, ContinuousHMM):
+            transformer = lambda x: np.log(np.array(x) + 1)
+        else:
+            raise Exception("Unknown model type")
+        return transformer
