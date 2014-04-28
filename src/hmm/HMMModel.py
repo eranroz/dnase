@@ -1,3 +1,5 @@
+from hmm.multivariatenormal import MultivariateNormal, MixtureModel
+
 __author__ = 'eranroz'
 import scipy.stats
 import numpy as np
@@ -78,11 +80,11 @@ class HMMModel(object):
         """
         new_state_transition = self.state_transition.copy()
         emission = self.get_emission()
-        unique_values = set(seq)
-        back_emission_seq = np.zeros((len(seq), self.num_states() - 1))
-        for v in unique_values:
-            back_emission_seq[seq == v, :] = emission[1:, v]
-
+        #unique_values = set(seq)
+        #back_emission_seq = np.zeros((len(seq), self.num_states() - 1))
+        #for v in unique_values:
+        #    back_emission_seq[seq == v, :] = emission[1:, v]
+        back_emission_seq = emission[1:, seq].T
         back_emission_seq *= bf_output.backward / bf_output.scales[:, None]
 
         new_state_transition[1:, 1:] *= np.dot(bf_output.forward[:-1, :].transpose(), back_emission_seq[1:, :])
@@ -194,13 +196,13 @@ class HMMModel(object):
         """
         n_states = self.num_states()
         emission = self.get_emission()
+
+        #unique_values = set(symbol_seq)
+        #emission_seq = np.zeros((len(symbol_seq), n_states - 1))
+        #for v in unique_values:
+        #    emission_seq[symbol_seq == v, :] = emission[1:, v]
+        emission_seq = emission[1:, symbol_seq].T
         state_trans_mat = self.get_state_transition()
-
-        unique_values = set(symbol_seq)
-        emission_seq = np.zeros((len(symbol_seq), n_states - 1))
-        for v in unique_values:
-            emission_seq[symbol_seq == v, :] = emission[1:, v]
-
         dot = np.dot  # shortcut for performance
         real_transitions_T = state_trans_mat[1:, 1:].T.copy(order='C')
         real_transitions_T2 = state_trans_mat[1:, 1:].copy(order='C')
@@ -215,7 +217,7 @@ class HMMModel(object):
                                          ['readwrite', 'allocate', 'no_broadcast'],
                                          ['readwrite', 'allocate', 'no_broadcast']
                                      ],
-                                     op_axes=[[-1, 0, 1], [-1, 0, 1], [-1, 0, -1]])
+                                     op_axes=[[-1, 0, 1], [-1, 0, 1], [-1, 0, -1]], order='C')
 
         #-----	  forward algorithm	  -----
         #intial condition is begin state (in Durbin there is another forward - the begin = 1)
@@ -254,7 +256,7 @@ class HMMModel(object):
                                       flags=['external_loop', 'reduce_ok'],
                                       op_flags=[['readonly'],
                                                 ['readwrite', 'allocate']],
-                                      op_axes=[[-1, 0, 1], [-1, 0, 1]])
+                                      op_axes=[[-1, 0, 1], [-1, 0, 1]], order='C')
 
         #recursion step
         e_trans = iter((emission_seq / s_j[:, None])[:0:-1, None, :] * real_transitions_T2)
@@ -468,7 +470,9 @@ class ContinuousHMM(HMMModel):
         if self.emission.mixtures is None:
             state_norm = np.sum(gammas, 0)
             mu = np.sum(gammas * seq[:, None], 0) / state_norm
-            sym_min_mu = np.power(seq[:, None] - mu, 2)
+            old_mu = self.emission.mean_vars[1:, 0]
+            #sym_min_mu = np.power(seq[:, None] - mu, 2)
+            sym_min_mu = np.power(seq[:, None] - old_mu, 2)
             std = np.sqrt(np.sum(gammas * sym_min_mu, 0) / state_norm)
 
             std = np.maximum(std, min_std)  # it must not get to zero
@@ -526,7 +530,7 @@ class _ContinuousEmission():
         self.mean_vars = mean_vars
         self.mixtures = mixture_coef
         self.cache = dict()
-        self.min_p = 1e-100
+
         self.states = self._set_states()
         self._set_states()
 
@@ -567,21 +571,203 @@ class _ContinuousEmission():
         @param x:  first index is state (or slice for all states), second is value or array of values
         @return: p according to pdf
         """
+        min_p = np.finfo(float).eps  # 1e-100
         if isinstance(x[0], slice):
             if isinstance(x[1], np.ndarray):  # this new case improves performance if you give emission array of values
-                pdfs = np.array([dist(x[1]) for dist in self.states[x[0]]]).T
-                pdfs = np.maximum(pdfs, self.min_p)
+                pdfs = np.array([dist(x[1]) for dist in self.states[x[0]]])
+                pdfs = np.maximum(pdfs, min_p)
                 return pdfs
             else:
                 try:
                     return self.cache[x[1]]
                 except KeyError:
                     pdfs = np.array([dist(x[1]) for dist in self.states[x[0]]])
-                    pdfs = np.maximum(pdfs, self.min_p)
+                    pdfs = np.maximum(pdfs, min_p)
                     self.cache[x[1]] = pdfs
                     return self.cache[x[1]]
         else:
             return self.states[x[0]].pdf(x[1])
+
+    def __getstate__(self):
+        return {
+            'mean_vars': self.mean_vars,
+            'mixture_coef': self.mixtures,
+            'dist_func': self.dist_func
+        }
+
+    def __setstate__(self, state):
+        self.mean_vars = state['mean_vars']
+        self.mixtures = state['mixture_coef']
+        self.dist_func = state['dist_func']
+        self.cache = dict()
+        self.states = self._set_states()
+
+    def __str__(self):
+        return '\n'.join([str(self.dist_func.name) + ' distribution', 'Mean\t Var', str(self.mean_vars)])
+
+
+class GaussianHMM(HMMModel):
+    """
+    Gaussian HMM for multidimensional gaussian mixtures. Extension for Continuous HMM above
+
+    The states are gaussian mixtures
+    @param state_transition: state transition matrix
+    @param mean_vars: array of mean, var tuple (or array of such for mixtures)
+    @param mixture_coef: mixture coefficients
+
+    """
+    def __init__(self, state_transition, mean_vars, mixture_coef=None, min_alpha=None):
+        if len(mean_vars) == len(state_transition):
+            mean_vars = mean_vars[1:]  # trim the begin emission
+
+        # if not mixture (only tuple) wrap it with another list
+        mean_vars = [[mean_cov] if isinstance(mean_cov, tuple) else mean_cov for mean_cov in mean_vars]
+
+        # same type: all mean vars should be lists
+        emission = _GaussianEmission(mean_vars, mixture_coef)
+        super().__init__(state_transition, emission, min_alpha=min_alpha)
+
+    def _maximize_emission(self, seq, gammas):
+        min_std = np.finfo(float).eps  #1e-5 #
+        state_norm = np.sum(gammas, 0)
+        mean_vars = []
+        mixture_coeff = []
+        for state in np.arange(0, self.num_states() - 1):
+            is_mixture = len(self.emission.mixtures[state]) > 1
+            if is_mixture:
+                emissions = self.emission.components_emission(state, seq, use_log=True)
+                sum_emissions = np.sum(emissions, 0)
+                emissions /= sum_emissions[:, None]  # normalize
+                gamma_state = emissions * gammas[:, state][:, None]
+                del emissions
+                mixture_coeff.append(sum_emissions/np.sum(sum_emissions))
+            else:
+                gamma_state = gammas[:, state][:, None]
+                mixture_coeff.append([1])
+
+            covars_mixture = []
+            new_means = (np.dot(seq, gamma_state) / state_norm[state]).T
+            for mixture_i, mixture in enumerate(self.emission.mixtures[state]):
+                gamma_c = gamma_state[:, mixture_i]
+                old_mean = self.emission.mean_vars[state][mixture_i][0]
+
+                seq_min_mean = seq - old_mean.T
+                new_cov = np.dot((seq_min_mean * gamma_c), seq_min_mean.T) / state_norm[state]
+                new_cov = np.sqrt(np.maximum(new_cov, min_std))
+                #if is_mixture:
+                covars_mixture.append(new_cov)
+            mean_vars.append(list(zip(new_means, covars_mixture)))
+
+        self.emission = _GaussianEmission(mean_vars, mixture_coeff)
+
+    def _maximize_emission_nolog(self, seq, gammas):
+        min_std = np.finfo(float).eps  #1e-5 #
+        state_norm = np.sum(gammas, 0)
+        mean_vars = []
+        mixture_coeff = []
+        for state in np.arange(0, self.num_states() - 1):
+            is_mixture = len(self.emission.mixtures[state]) > 1
+            if is_mixture:
+                emissions = self.emission.components_emission(state, seq)
+                sum_emissions = np.sum(emissions, 0)
+                emissions /= sum_emissions[:, None]  # normalize
+                gamma_state = emissions * gammas[:, state][:, None]
+                del emissions
+                mixture_coeff.append(sum_emissions/np.sum(sum_emissions))
+            else:
+                gamma_state = gammas[:, state][:, None]
+                mixture_coeff.append([1])
+
+            covars_mixture = []
+            new_means = (np.dot(seq, gamma_state) / state_norm[state]).T
+            for mixture_i, mixture in enumerate(self.emission.mixtures[state]):
+                gamma_c = gamma_state[:, mixture_i]
+                old_mean = self.emission.mean_vars[state][mixture_i][0]
+
+                seq_min_mean = seq - old_mean.T
+                new_cov = np.dot((seq_min_mean * gamma_c), seq_min_mean.T) / state_norm[state]
+                new_cov = np.sqrt(np.maximum(new_cov, min_std))
+
+                #if is_mixture:
+                covars_mixture.append(new_cov)
+            mean_vars.append(list(zip(new_means, covars_mixture)))
+
+        self.emission = _GaussianEmission(mean_vars, mixture_coeff)
+
+
+class _GaussianEmission():
+    """
+    Emission for continuous HMM.
+    """
+
+    def __init__(self, mean_vars, mixture_coef=None):
+        """
+        Initializes a new continuous distribution states.
+        @param mean_vars: np array of mean and variance for each state
+        @return: a new instance of ContinuousDistStates
+        """
+        # if no mixture defined set to 1
+        if mixture_coef is None:
+            mixture_coef = np.ones((len(mean_vars), 1))
+        self.mean_vars = _GaussianEmission._normalize_mean_vars(mean_vars)
+        self.mixtures = mixture_coef
+        self.states, self.pseudo_states = self._set_states()
+
+    @staticmethod
+    def _normalize_mean_vars(mean_vars):
+        # use numpy arrays
+        n_mean_vars = []
+        for state in mean_vars:
+            state_mean_cov = []
+            for mean, cov in state:
+                mean = np.array(mean)
+                if mean.ndim == 0:
+                    mean = mean[None, None]
+                if mean.ndim == 1:
+                    mean = mean[None]
+                cov = np.array(cov)
+                if cov.ndim == 0:
+                    cov = cov[None, None]
+                if mean.ndim == 1:
+                    cov = cov[None]
+                state_mean_cov.append((mean, cov))
+            n_mean_vars.append(state_mean_cov)
+        return n_mean_vars
+
+    def _set_states(self):
+        states = []
+        pseudo_states = []
+        for mean_var, mixture in zip(self.mean_vars, self.mixtures):
+            if mixture == 1:
+                emission = MultivariateNormal(mean_var[0][0], mean_var[0][1])
+                pseudo_states.append(emission.pdf)
+            else:
+                emission = MixtureModel([MultivariateNormal(mean, cov) for mean, cov in mean_var], mixture)
+                pseudo_states.append(emission.components_pdf)
+            states.append(emission.pdf)
+
+        return states, pseudo_states
+
+    def components_emission(self, states, observations, use_log=False):
+        min_p = np.finfo(float).eps if use_log else -np.inf
+        if isinstance(states, int):
+            return np.maximum(self.pseudo_states[states].log_pdf(observations), min_p, use_log=use_log)
+        pdfs = np.array([dist(observations, use_log=True) for dist in self.pseudo_states[states]]).T
+        return np.maximum(pdfs, min_p)
+
+    def __getitem__(self, x):
+        """
+        Get emission for state
+        @param x:  first index is state (or slice for all states), second is value or array of values
+        @return: p according to pdf
+        """
+        min_p = np.finfo(float).eps
+        if isinstance(x[0], int):
+            return np.maximum(self.states[x[0]].pdf(x[1]), min_p)
+
+        pdfs = np.array([dist(x[1]) for dist in self.states])
+
+        return np.maximum(pdfs, min_p)
 
     def __getstate__(self):
         return {
@@ -592,10 +778,7 @@ class _ContinuousEmission():
     def __setstate__(self, state):
         self.mean_vars = state['mean_vars']
         self.mixtures = state['mixture_coef']
-        self.dist_func = scipy.stats.norm  # TODO: save name for the method to support other dist funcs
-        self.min_p = 1e-5
-        self.cache = dict()
-        self.states = self._set_states()
+        self.states, self.pseudo_states = self._set_states()
 
     def __str__(self):
-        return '\n'.join([str(self.dist_func.name) + ' distribution', 'Mean\t Var', str(self.mean_vars)])
+        return 'Mean\t Var\n %s'% str(self.mean_vars)

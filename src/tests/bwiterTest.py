@@ -56,9 +56,8 @@ def simpleBwIter():
     #rand_model = bwiter.bw_iter(translated_dice, n_states=3, n_alphabet=6)
 
     #new_model2 = bwiter.bw_iter_log(translated_dice, initial_model, stop_condition=IterCondition(5))
-    new_model = bwiter.bw_iter_old(translated_dice, initial_model, stop_condition=IteratorCondition(10))
     #print('Old\n',new_model)
-    new_model = bwiter.bw_iter(translated_dice, initial_model, stop_condition=IteratorCondition(10))
+    new_model, p = bwiter.bw_iter(translated_dice, initial_model, stop_condition=IteratorCondition(10))
     #print('New\n',new_model)
 
     bw_output1 = initial_model.forward_backward(translated_dice)
@@ -92,7 +91,7 @@ def simpleBwIter():
             ax.add_patch(p)
 
         plt.show()
-    #showPlot()
+    showPlot()
 
 def logTest():
     n_tiles = 5000
