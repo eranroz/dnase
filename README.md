@@ -17,6 +17,7 @@ The project is written in python 3, with some cython and c in critical code path
 
 Installation:
 * Clone the repository
+* copy config_default.py to config.py and define the directories to work with
 * pyx - compile using the following command:
 > python setup.py build_ext --inplace
 
