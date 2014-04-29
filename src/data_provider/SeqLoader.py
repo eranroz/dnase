@@ -183,7 +183,7 @@ def bed_graph_transform(bedgraph_file, smoothing=100, save=True):
         return written_dict
 
 
-def chrom_sizes() -> dict:
+def chrom_sizes():
     """
     Get chromosome sizes of hg19 as dictionary
     @rtype : dict
@@ -195,7 +195,7 @@ def chrom_sizes() -> dict:
     return chrom_dict
 
 
-def load_bg(bg_file) -> dict:
+def load_bg(bg_file):
     """
     Loads bed graph
     should be faster then the above and directly load it
@@ -316,7 +316,7 @@ def load_result_dict(output_filename):
             return sequence_dict
 
 
-def load_experiments(cell_type, experiments=None, chromosomes=None) -> dict:
+def load_experiments(cell_type, experiments=None, chromosomes=None):
     """
     Generic function to access experiments data of "markers", such as methylations and acetylations.
     Since it is common that we don't have the experiment data for the specific sample
@@ -436,25 +436,7 @@ def down_sample(seq, new_sampling_factor=1):
     seq = np.array(seq)
     # either cut the end (here) or extend with zero (but may later damage the max chromosome length)
     seq = seq[0:seq.shape[0] - (seq.shape[0] % new_sampling_factor)]
-    return seq.reshape(seq.shape[0] / new_sampling_factor, new_sampling_factor).sum(1)
-
-
-def publish_dic(dic_to_publish, resolution, name):
-    """
-    Publish dictionary: transforms it to big wig place it in PUBLISH_DIR
-    @param dic_to_publish:
-    @param resolution:
-    @param name:
-    """
-    import tempfile
-
-    with tempfile.NamedTemporaryFile('w+', encoding='ascii') as tmp_file:
-        build_bedgraph(dic_to_publish, resolution=resolution, output_file=tmp_file)
-        if not name.endswith('.bw'):
-            name += '.bw'
-        bg_to_bigwig(tmp_file.name, os.path.join(PUBLISH_DIR, '%s.bw' % name))
-        track_header = 'track type=bigWig name="" description="" bigDataUrl=%s/open-closed/%s.bw'
-    print(track_header % (PUBLISH_URL_PATH, name))
+    return seq.reshape(seq.shape[0] // new_sampling_factor, new_sampling_factor).sum(1)
 
 
 def build_bedgraph(classified_seq, resolution, output_file):
