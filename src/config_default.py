@@ -11,7 +11,7 @@ RAW_DATA_OTHER = os.path.abspath('../raw_other_data')  # backup directory to sav
 OTHER_DATA = os.path.abspath('../other_data/')  # directory for other biological signal data
 RES_DIR = os.path.abspath('../results/')  # directory for results
 BIN_DIR = os.path.abspath('../bin/')  # directory for executable of transformers
-PUBLISH_DIR = os.path.abspath('../results/open-closed/')  # directory accessible to web for publish results
+PUBLISH_DIR = os.path.abspath('../results/hub/')  # directory accessible to web for publish results
 BED_GRAPH_RESULTS_DIR = os.path.join(RES_DIR, 'open-closed', 'data')  # directory for segmentation
 NCBI_DIR = '...'
 

@@ -176,14 +176,15 @@ if __name__ == "__main__":
     python3 -m dnase_classify --posterior --resolution 1000 UW.Fetal_Brain.ChromatinAccessibility.H-22510.DS11872
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument('infile', help="input file, included in the data directory")
+    parser.add_argument('infile', help="input file, included in the data directory. with no file and resolution" +
+                                       " extensions (suffixes)")
     parser.add_argument('--posterior', help="use this option to output posterior probabilities instead of states",
                         action="store_true")
     parser.add_argument('--resolution', help="resolution to use for classification", type=int, default=500)
     parser.add_argument('--model', help="model file to be used")
     parser.add_argument('--model_type', help="Model type: discrete (d) or continuous (c)", type=str,
-                        default='continuous')
-    parser.add_argument('--min_alpha', help="Prior for transition probabilities", type=float, default=None)
+                        default='discrete')
+    parser.add_argument('--min_alpha', help="Prior for transition probabilities", type=float, default=0)
     parser.add_argument('--min_alpha_open', help="Prior for transition probabilities", type=float, default=None)
     parser.add_argument('--min_alpha_closed', help="Prior for transition probabilities", type=float, default=None)
     parser.add_argument('--output', help="Output file prefix", default=None)
@@ -200,6 +201,9 @@ if __name__ == "__main__":
         ])
 
     model_name = args.model
+    if args.infile.endswith('.20.pkl') or args.infile.endswith('.20.npz'):
+        print('Wartning: input file includes file and resolution extensions')
+
     output_path = args.output or os.path.basename(args.infile)
     if model_name is None or not dnase_classifier.model_exist(model_name):
         is_discrete = args.model_type[0].upper() == 'D'
@@ -212,7 +216,7 @@ if __name__ == "__main__":
         classifier.save()  # create directory for the model
     else:
         classifier = dnase_classifier.load(model_name)
-    classifier.classify_file(args.infile, output_path)
+    classifier.save_classify_file(args.infile, output_path)
 
     #classify_continuous(in_file=args.infile, output_p=args.posterior, model_name=args.model, out_file=args.output)
     #classify_discrete(in_file=args.infile, output_p=args.posterior, model_name=args.model, out_file=args.output)

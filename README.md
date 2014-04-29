@@ -11,6 +11,7 @@ Markov Models for learning the chromatin organization.
  * gene breaks - number of genes that fall between domains
 * Various script for download, transform and integration of data from different sources
 * Performance and portability: works under Linux and Windows with 64-bit. The project includes some cython code for critical code paths: a parser for bed graph files (parsing ~500Mb file in ~10 sec) and some HMM algorithms (Viterbi)
+* Create custom UCSC hubs for trained models
 
 # Installation and usage
 The project is written in python 3, with some cython and c in critical code paths. It doesn't have UI but some command line tools.

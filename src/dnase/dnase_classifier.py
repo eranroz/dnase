@@ -8,6 +8,7 @@ import logging
 import os
 from config import MODELS_DIR, DATA_DIR
 from data_provider import SeqLoader
+from data_provider.data_publisher import publish_dic
 
 __author__ = 'eranroz'
 import pickle
@@ -27,13 +28,15 @@ def model_dir(model_name):
 def load(model_name):
     """
     Loads a model
-    @param model_name:
-    @return:
+    @rtype : DNaseClassifier
+    @param model_name: name of model to be loaded
+    @return: a segmentation model
     """
     model_path = os.path.join(model_dir(model_name), _model_file_name)
     if not os.path.exists(model_path):
         raise IOError("Model doesn't exist (%s)" % model_path)
-    return pickle.load(model_path)
+    with open(model_path, 'rb') as f:
+        return pickle.load(f)
 
 
 def model_exist(model_name):
@@ -42,7 +45,7 @@ def model_exist(model_name):
     @param model_name: model name
     @return: true is such model exist otherwise false
     """
-    return os.path.join(model_dir(model_name), _model_file_name)
+    return os.path.exists(os.path.join(model_dir(model_name), _model_file_name))
 
 
 class DNaseClassifier(object):
@@ -91,7 +94,14 @@ class DNaseClassifier(object):
                                    directory=os.path.dirname(infile) or DATA_DIR)  # TODO: can load only partial
         self.fit([data])
 
-    def classify_file(self, file_name, out_file, save_raw=True, save_npz=True, save_bg=True):
+    def classify_file(self, file_name, chromosomes=None):
+        transformer = self.strategy.data_transform()
+
+        data = SeqLoader.load_dict(file_name, resolution=self.resolution, transform=transformer,
+                                   directory=os.path.dirname(file_name) or DATA_DIR, chromosomes=chromosomes)
+        return self.classify([data])
+
+    def save_classify_file(self, file_name, out_file, save_raw=True, save_npz=True, save_bg=True):
         """
         Classifies file and saves it and related files to directory of the model
         @param file_name: name of file to classify
@@ -107,17 +117,28 @@ class DNaseClassifier(object):
         path_to_save = self.model_dir()
         if save_raw:
             print('Writing raw file')
-            SeqLoader.build_bedgraph(data, resolution=self.resolution,
-                                     output_file=os.path.join(path_to_save, '%s.raw.bg' % out_file))
-
-        for classified_seq in self.classify([data]):
+            #SeqLoader.build_bedgraph(data, resolution=self.resolution,
+            #                         output_file=os.path.join(path_to_save, '%s.raw.bg' % out_file))
+            publish_dic(data,
+                        self.resolution,
+                        '%s.%s.raw' % (self.name, out_file),
+                        short_label="Raw %s" % out_file,
+                        long_label="Raw file after transformation")
+        segmentation = self.classify([data])
+        for classified_seq in segmentation:
             if save_bg:
                 print('Writing result file (bg format)')
-                SeqLoader.build_bedgraph(classified_seq, resolution=self.resolution,
-                                         output_file=os.path.join(path_to_save, '%s.bg' % out_file))
+                publish_dic(classified_seq, self.resolution, '%s.%s' % (self.name, out_file),
+                            short_label="%s-%s" % (out_file, self.name),
+                            long_label="HMM classification.  %s" % (str(self)))
             if save_npz:
                 print('Writing result file (npz format)')
                 SeqLoader.save_result_dict(os.path.join(path_to_save, '%s.npz' % out_file), classified_seq)
+        return segmentation
+
+    def __str__(self):
+        strategy_str = str(self.strategy)
+        return strategy_str
 
     def save(self, warn=True):
         """
@@ -129,9 +150,9 @@ class DNaseClassifier(object):
         if os.path.exists(path):
             if warn:
                 logging.warning("Model already exist - overriding it")
-                confirm = input("Do you want to override model \"%s\"? (Y/N)"%path).upper().strip()
+                confirm = input("Do you want to override model \"%s\"? (Y/N)" % path).upper().strip()
                 while confirm not in ['Y', 'N']:
-                    confirm = input("Do you want to override model \"%s\"? (Y/N)"%path).upper().strip()
+                    confirm = input("Do you want to override model \"%s\"? (Y/N)" % path).upper().strip()
 
                 if confirm == 'N':
                     return
@@ -143,11 +164,24 @@ class DNaseClassifier(object):
         with open(os.path.join(path, _model_file_name), 'wb') as model_file:
             pickle.dump(self, model_file)
 
-    def model_dir(self):
+    def model_dir(self, join=""):
         """
         Get the directory associated with this model
 
+        @param join: name of file within model directory
         @return: directory name associated with this model
         """
-        return model_dir(self.name)
+        return os.path.join(model_dir(self.name), join)
+
+    def load_data(self, infile, chromosomes=None):
+        transformer = self.strategy.data_transform()
+        data = SeqLoader.load_dict(infile, resolution=self.resolution, transform=transformer,
+                                   directory=os.path.dirname(infile) or DATA_DIR, chromosome=chromosomes)
+        return data
+
+    def segmentation_file_path(self):
+        """
+        Get the associated segmentation file path associated with the model.
+        """
+        return self.model_dir("segmentation.npz")
 

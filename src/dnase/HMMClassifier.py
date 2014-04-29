@@ -3,6 +3,7 @@ Classifies the genome using HMM model.
 """
 import numpy as np
 import data_provider
+from data_provider.DiscreteTransformer import DiscreteTransformer
 from dnase.ClassifierStrategy import ClassifierStrategy
 from hmm.HMMModel import HMMModel, ContinuousHMM, DiscreteHMM
 from hmm.bwiter import bw_iter, IteratorCondition
@@ -127,9 +128,21 @@ class HMMClassifier(ClassifierStrategy):
         Get data transformer for transforming raw data before classify or fit
         """
         if isinstance(self.model, DiscreteHMM):
-            transformer = data_provider.DiscreteTransformer()
+            transformer = DiscreteTransformer()
         elif isinstance(self.model, ContinuousHMM):
             transformer = lambda x: np.log(np.array(x) + 1)
         else:
             raise Exception("Unknown model type")
         return transformer
+
+    def __str__(self):
+        hmm_type = ''
+        if isinstance(self.model, DiscreteHMM):
+            hmm_type = 'Discrete'
+        elif isinstance(self.model, ContinuousHMM):
+            hmm_type = 'Continuous'
+        return "{hmm_type} HMM classifier. Decoding: {decode_algorithm}. {num_states} states".format(**({
+        'hmm_type': hmm_type,
+        'decode_algorithm': 'EM' if self.output_p else 'viterbi',
+        'num_states': self.model.num_states()
+    }))

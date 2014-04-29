@@ -8,7 +8,7 @@ import re
 
 import numpy as np
 
-from config import BED_GRAPH_RESULTS_DIR
+from config import BED_GRAPH_RESULTS_DIR, MEAN_DNASE_DIR
 from data_provider import SeqLoader
 from data_provider import featureLoader
 
@@ -51,35 +51,45 @@ class SegmentationFeatures:
 class ChromosomeSegmentation:
     """
     Class for chromosome segmentation to regions
-    @param name: name of cell type and sample
-    @param segmentation: the segmentation to regions array of [[start, length, open/closed]]
-    @param resolution: bin size/resolution of segmentation
-    @param chromosome: chromosome name
     """
-    _RE_NAME_EXTRACTOR = re.compile('UW\.(.+?)\.(.+?)\.(.+)')
 
-    def __init__(self, name, segmentation, resolution, chromosome):
+    def __init__(self, cell_type, segmentation, chromosome, model):
+        #(cell_type, seg, chromosome, model)
+        #cell_type, segmentation, resolution, chromosome
         # meta data:
-        self.name = name
-        self.resolution = resolution
+        """
+        @type model: DNaseClassifier
+        @param cell_type: name of cell type to get additional data for
+        @param segmentation: segmentation array
+        @param chromosome: name of chromosome
+        @param model: model used for creating the segmentation
+        """
+        self.cell_type = cell_type
+        self.resolution = model.resolution
+        self.model = model
         self.chromosome = chromosome
         self.data = self._set_segmentation(segmentation)
         # core features - loaded during construction
         self.feature_mapping = [SegmentationFeatures.Position, SegmentationFeatures.RegionLengths,
                                 SegmentationFeatures.OpenClosed]
         self.markers = None
-        m = ChromosomeSegmentation._RE_NAME_EXTRACTOR.match(name)
-        if m:
-            self.cell_type, self.experiment, self.sample = m.groups()
-        else:
-            self.cell_type, self.experiment, self.sample = [None] * 3
 
-    @staticmethod
-    def _set_segmentation(segmentation):
+
+    def _set_segmentation(self, segmentation):
         """
         Transforms bins of open/closed to compact array of [[start, length, open/closed]]
         @param segmentation: 1 for open, 0 for closed
         """
+
+        # TODO: assign open and closed correctly based on cell type
+        """
+        cell_data = self.model.classify_file(os.path.join(MEAN_DNASE_DIR, self.cell_type), chromosomes=self.chromosome)
+        boundaries = np.convolve(segmentation[self.chromosome], [1, -1])
+        boundaries = np.append(0, np.where(boundaries))  # add boundary at beginning
+        for start, end in zip(boundaries[:-1], boundaries[1:]):
+            cell_data[self.chromosome][start:end] = np.mean(cell_data[self.chromosome][start:end]) > 0.5  # threshold
+        """
+
         vv = np.convolve(segmentation, [1, -1])
         #vv = np.append(-1, vv)  # start always with closed
         boundaries = np.append(0, np.where(vv))  # add boundary at beginning
@@ -140,11 +150,17 @@ class ChromosomeSegmentation:
 
     def _load_average_accessibility(self):
         # load original dnase results and select only the required chromosome
-        accessibility_data = SeqLoader.load_dict(self.name, self.resolution, chromosome=self.chromosome)
+        accessibility_data = SeqLoader.load_result_dict(os.path.join(MEAN_DNASE_DIR, "%s.mean.npz" % self.cell_type))
         accessibility_data = accessibility_data[self.chromosome]
+        # down-sample to the resolution. original resolution for mean dnase is 20
+        accessibility_data = SeqLoader.down_sample(accessibility_data, (self.resolution / 20))
         region_matrix = self.get([SegmentationFeatures.Position, SegmentationFeatures.RegionLengths])
         region_matrix[:, 1] += region_matrix[:, 0]
-        region_accessibility = np.array([np.average(accessibility_data[start:end]) for start, end in region_matrix])
+        # keep same size as the matrix of segmentations
+        avg_accessibility = np.zeros(region_matrix[-1, 1]+1)
+        avg_accessibility[0:np.minimum(region_matrix[-1, 1], accessibility_data.shape[0])] = accessibility_data[0:np.minimum(
+            region_matrix[-1, 1], accessibility_data.shape[0])]
+        region_accessibility = np.array([np.average(avg_accessibility[start:end]) for start, end in region_matrix])
         return region_accessibility
 
     def _load_markers(self, markers=None):
@@ -193,24 +209,20 @@ class ChromosomeSegmentation:
         raise NotImplementedError
 
 
-def load(in_file, class_mode='viterbi', model_type='Discrete', resolution=500, sel_chromosomes=None):
+def load(cell_type, model, chromosomes=None):
     """
-    Loads genome or sub genome
+    Loads genome or sub genome and assigns states for specific cell type with the given segmentation
 
-    @param in_file: name of input data
-    @param class_mode: Classification mode. viterbi or poterior
-    @param model_type: Type of segmentation model: discrete or continous
-    @param resolution: Resolution used for segmentation
-    @param sel_chromosomes: chromosomes to load
+    @type model: DNaseClassifier
+    @param model: model used for creating segmentation
+    @param cell_type: name of cell type to analyze
+    @param chromosomes: chromosomes to load
     """
-    pkl_file_name = os.path.join(BED_GRAPH_RESULTS_DIR,
-                                 '%s.%s%i.%s.npz' % (in_file, model_type, resolution, class_mode))
-    seg_dict = SeqLoader.load_result_dict(pkl_file_name)
+    segmentation = SeqLoader.load_result_dict(model.segmentation_file_path())
 
-    items = list(seg_dict.items())
-    for chromosome, seg in items:
-        if sel_chromosomes is not None and chromosome not in sel_chromosomes:
-            del seg_dict[chromosome]
-        else:
-            seg_dict[chromosome] = ChromosomeSegmentation(in_file, seg, resolution, chromosome)
+    seg_dict = dict()
+    #items = list(segmentation.items())
+    for chromosome in segmentation:
+        seg = segmentation[chromosome]
+        seg_dict[chromosome] = ChromosomeSegmentation(cell_type, seg, chromosome, model)
     return seg_dict
