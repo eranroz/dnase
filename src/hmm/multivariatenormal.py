@@ -23,11 +23,20 @@ class MultivariateNormal(object):
         d = cov.shape[0]
         s, u = np.linalg.eigh(cov)
         s_pinv = np.array([0 if abs(x) < 1e-5 else 1 / x for x in s], dtype=float)
-        self.prec_U = np.multiply(u, np.sqrt(s_pinv))
+        #self.prec_U = np.multiply(u, np.sqrt(s_pinv))
         pdet = np.prod(s[s > 1e-5])
         self.norm_p = d * np.log(2 * np.pi) + np.log(pdet)
         self.inv_cov = np.linalg.inv(cov)
-        self.my_norm_p = (((2*np.pi)**d)*np.linalg.det(cov))**-0.5
+        try:
+            self.my_norm_p = (((2*np.pi)**d)*np.linalg.det(cov))**-0.5
+        except FloatingPointError:
+            # create semi positive definite matrix for the covariance... (numrical issue...)
+            s = np.maximum(s, np.finfo(float).eps)
+            cov = np.dot(np.dot(u, np.diag(s)), np.linalg.inv(u))
+            self.inv_cov = np.linalg.inv(cov)
+            almost_det = np.linalg.det(cov)
+            self.my_norm_p = (((2*np.pi)**d)*almost_det)**-0.5
+
 
     def log_pdf(self, x):
         """
@@ -46,9 +55,15 @@ class MultivariateNormal(object):
         x = x.T-self.mean
         x_cov = np.dot(x, self.inv_cov)
         p = np.sum(x_cov * x, 1)
-
-        return (np.exp(-0.5*p)*self.my_norm_p).T
-
+        try:
+            p = np.exp(-0.5*p)
+        except FloatingPointError:
+            log_norm = np.log(self.my_norm_p)
+            minimum_val = np.ceil(np.log(np.finfo(float).tiny))
+            p = np.maximum(-0.5*p+log_norm, minimum_val)
+            return np.exp(p).T
+            #p[p <= np.finfo(float).tiny] = 0
+        return (p*self.my_norm_p).T
 
 
 class MixtureModel(object):
@@ -78,6 +93,9 @@ def test_mtuidim_multivariate_normal():
 
     z = rv.pdf(pos)
 
-    plt.contourf(x, y, z.reshape((100, 100)))
+    cs = plt.contour(x, y, z.reshape((100, 100)))
+    CB = plt.colorbar(cs, shrink=0.8, extend='both')
     plt.show()
 
+if __name__ =="__main__":
+    test_mtuidim_multivariate_normal()

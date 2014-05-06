@@ -14,7 +14,7 @@ BIN_DIR = os.path.abspath('../bin/')  # directory for executable of transformers
 PUBLISH_DIR = os.path.abspath('../results/hub/')  # directory accessible to web for publish results
 BED_GRAPH_RESULTS_DIR = os.path.join(RES_DIR, 'open-closed', 'data')  # directory for segmentation
 NCBI_DIR = '...'
-
+MEAN_DNASE_DIR = os.path.join(DATA_DIR, "cellTypes")
 # dependencies - use dataDownloader.setup_environment or install.sh in bin directory
 WIG_TO_BIG_WIG = os.path.join(BIN_DIR, 'wigToBigWig')
 BIG_WIG_TO_BED_GRAPH = os.path.join(BIN_DIR, 'bigWigToBedGraph')
