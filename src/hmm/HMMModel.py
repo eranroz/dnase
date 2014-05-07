@@ -635,39 +635,6 @@ class GaussianHMM(HMMModel):
         for state in np.arange(0, self.num_states() - 1):
             is_mixture = len(self.emission.mixtures[state]) > 1
             if is_mixture:
-                emissions = self.emission.components_emission(state, seq, use_log=True)
-                sum_emissions = np.sum(emissions, 0)
-                emissions /= sum_emissions[:, None]  # normalize
-                gamma_state = emissions * gammas[:, state][:, None]
-                del emissions
-                mixture_coeff.append(sum_emissions/np.sum(sum_emissions))
-            else:
-                gamma_state = gammas[:, state][:, None]
-                mixture_coeff.append([1])
-
-            covars_mixture = []
-            new_means = (np.dot(seq, gamma_state) / state_norm[state]).T
-            for mixture_i, mixture in enumerate(self.emission.mixtures[state]):
-                gamma_c = gamma_state[:, mixture_i]
-                old_mean = self.emission.mean_vars[state][mixture_i][0]
-
-                seq_min_mean = seq - old_mean.T
-                new_cov = np.dot((seq_min_mean * gamma_c), seq_min_mean.T) / state_norm[state]
-                new_cov = np.sqrt(np.maximum(new_cov, min_std))
-                #if is_mixture:
-                covars_mixture.append(new_cov)
-            mean_vars.append(list(zip(new_means, covars_mixture)))
-
-        self.emission = _GaussianEmission(mean_vars, mixture_coeff)
-
-    def _maximize_emission_nolog(self, seq, gammas):
-        min_std = np.finfo(float).eps  #1e-5 #
-        state_norm = np.sum(gammas, 0)
-        mean_vars = []
-        mixture_coeff = []
-        for state in np.arange(0, self.num_states() - 1):
-            is_mixture = len(self.emission.mixtures[state]) > 1
-            if is_mixture:
                 emissions = self.emission.components_emission(state, seq)
                 sum_emissions = np.sum(emissions, 0)
                 emissions /= sum_emissions[:, None]  # normalize
@@ -686,14 +653,28 @@ class GaussianHMM(HMMModel):
 
                 seq_min_mean = seq - old_mean.T
                 new_cov = np.dot((seq_min_mean * gamma_c), seq_min_mean.T) / state_norm[state]
-                new_cov = np.sqrt(np.maximum(new_cov, min_std))
-
+                if np.any(new_cov<0):
+                    new_cov = np.maximum(new_cov, 0)
+                new_cov = np.sqrt(new_cov)
+                # the diagonal must be large enough
+                np.fill_diagonal(new_cov, np.maximum(np.diag(new_cov), min_std))
                 #if is_mixture:
                 covars_mixture.append(new_cov)
             mean_vars.append(list(zip(new_means, covars_mixture)))
 
         self.emission = _GaussianEmission(mean_vars, mixture_coeff)
 
+    def viterbi(self, symbol_seq):
+        """
+        Find the most probable path through the model
+
+        Dynamic programming algorithm for decoding the states.
+        Implementation according to Durbin, Biological sequence analysis [p. 57]
+
+        @param symbol_seq: observed sequence (array). Should be numerical (same size as defined in model)
+        """
+        emission_seq = np.log(self.get_emission()[1:, symbol_seq]).T
+        return _hmmc.viterbi(emission_seq, self.state_transition)
 
 class _GaussianEmission():
     """

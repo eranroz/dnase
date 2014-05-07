@@ -49,9 +49,10 @@ def bw_iter(symbol_seq, initial_model=None, stop_condition=IteratorCondition(3))
     """
     Estimates model parameters using Baum-Welch algorithm
 
+    @rtype : tuple(HMMModel, int)
     @param symbol_seq: observations
     @param initial_model: Initial guess for model parameters
-    @type initial_model: C{ContinuousHMM} or C{DiscreteHMM}
+    @type initial_model: C{ContinuousHMM} or C{DiscreteHMM} or C{GaussianHMM}
     @param stop_condition: Callable like object/function that takes probability as parameter
     @return: HMM model estimation
     """
