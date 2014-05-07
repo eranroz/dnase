@@ -40,7 +40,7 @@ from hmm.HMMModel import DiscreteHMM
 
 __author__ = 'eranroz'
 
-_CELL_TYPES_DIR = os.path.join(OTHER_DATA, 'represent', 'mean_dnase')
+_CELL_TYPES_DIR = os.path.join(DATA_DIR, 'represent', 'mean_dnase')
 
 
 def cell_type_mean_specific(cell_type):
@@ -51,14 +51,14 @@ def cell_type_mean_specific(cell_type):
     """
     global _CELL_TYPES_DIR
     out_file = os.path.join(_CELL_TYPES_DIR, '%s.mean.npz' % cell_type)
-    print(cell_type)
+    print('Creating mean for %s' % cell_type)
     #if os.path.exists(out_file):
     #    print('skipping cell type - already have mean')
 
     cell_data = []
     cell_type_dir = os.path.join(NCBI_DIR, cell_type)
     for sample in os.listdir(cell_type_dir):
-        if '.wig' in sample:
+        if not sample.endswith('.npz'):
             continue
         data = SeqLoader.load_dict(sample.replace('.20.npz', ''), 20, directory=cell_type_dir)
         cell_data += [data]
@@ -72,6 +72,7 @@ def cell_type_mean_specific(cell_type):
             combined[i, 0:len(d[chrom])] = d[chrom]
         cell_represent[chrom] = combined.mean(0)
     SeqLoader.save_result_dict(out_file, cell_represent)
+    print('Completed creating mean for %s' % cell_type)
 
 
 def read_chromosome_sparse(resolution=100, chromosome='chr1'):
@@ -299,10 +300,12 @@ def multichannel_hmm_discrete(resolution, model_name=None, output_p=False, out_f
 if __name__ == '__main__':
     commands = {
         'cell_type_mean': cell_type_mean,
+        'cell_type_mean_specific': cell_type_mean_specific,
         'multichannel_hmm': multichannel_hmm_discrete
     }
     parser = argparse.ArgumentParser()
     parser.add_argument('command', help="command to execute: %s" % (', '.join(list(commands.keys()))))
+    parser.add_argument('--cell_type', help="target cell type")
     parser.add_argument('--posterior', help="use this option to output posterior probabilities instead of states",
                         action="store_true", default=False)
     parser.add_argument('--model', help="model file to be used")
@@ -313,5 +316,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.command == 'multichannel_hmm':
         multichannel_hmm_discrete(args.resolution, model_name=args.model, output_p=args.posterior, out_file=args.output)
+    elif args.command == 'cell_type_mean_specific':
+        print(args.cell_type)
+        cell_type_mean_specific(args.cell_type)
     else:
         commands[args.command]()
