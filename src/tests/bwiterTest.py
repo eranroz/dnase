@@ -5,13 +5,13 @@ __author__ = 'eran'
 Test for Baum-Welch, or iterative backward forward
 """
 
-
 from hmm import bwiter
 from hmm.HMMModel import HMMModel, DiscreteHMM
 import numpy as np
 import matplotlib.pyplot as plt
 
 from matplotlib.patches import Polygon
+
 __author__ = 'eran'
 
 
@@ -91,7 +91,9 @@ def simpleBwIter():
             ax.add_patch(p)
 
         plt.show()
+
     showPlot()
+
 
 def logTest():
     n_tiles = 5000
@@ -139,8 +141,8 @@ def logTest():
     #print(fbward.forward_backward(translated_dice, initial_model).state_p[0:5, 1])
     new_model2 = bwiter.bw_iter_log(translated_dice, initial_model, stop_condition=IteratorCondition(10))
     new_model = bwiter.bw_iter(translated_dice, initial_model, stop_condition=IteratorCondition(1))
-    print('Correct:\n', new_model.emission[1:] )
-    print('Log:\n', new_model2.emission[1:] )
+    print('Correct:\n', new_model.emission[1:])
+    print('Log:\n', new_model2.emission[1:])
 
 #cProfile.run('simpleBwIter()')
 simpleBwIter()
