@@ -188,6 +188,12 @@ if __name__ == "__main__":
     parser.add_argument('--min_alpha_open', help="Prior for transition probabilities", type=float, default=None)
     parser.add_argument('--min_alpha_closed', help="Prior for transition probabilities", type=float, default=None)
     parser.add_argument('--output', help="Output file prefix", default=None)
+    parser.add_argument('--output_raw', dest='output_raw', action='store_true')
+    parser.add_argument('--no-output_raw', dest='output_raw', action='store_false')
+    parser.set_defaults(output_raw=True)
+    parser.add_argument('--output_seg_bg', dest='output_seg_bg', action='store_true')
+    parser.add_argument('--no-output_seg_bg', dest='output_seg_bg', action='store_false')
+    parser.set_defaults(output_seg_bg=True)
     args = parser.parse_args()
     print('Args')
     print(args)
@@ -208,7 +214,8 @@ if __name__ == "__main__":
     if model_name is None or not dnase_classifier.model_exist(model_name):
         is_discrete = args.model_type[0].upper() == 'D'
         if model_name is None:
-            model_name = '%s%i-a[%.3f, %3f]' % ('Discrete' if is_discrete else 'Continuous', resolution, min_alpha[0], min_alpha[1])
+            model_name = '%s%i-a[%.3f, %3f]' % (
+                'Discrete' if is_discrete else 'Continuous', resolution, min_alpha[0], min_alpha[1])
         strategy = HMMClassifier.default(is_discrete, min_alpha)
         strategy.output_p = args.posterior  # viterbi or posterior
         classifier = dnase_classifier.DNaseClassifier(strategy, resolution, model_name)
@@ -216,7 +223,7 @@ if __name__ == "__main__":
         classifier.save()  # create directory for the model
     else:
         classifier = dnase_classifier.load(model_name)
-    classifier.save_classify_file(args.infile, output_path)
+    classifier.save_classify_file(args.infile, output_path, save_raw=args.output_raw, save_bg=args.output_seg_bg)
 
     #classify_continuous(in_file=args.infile, output_p=args.posterior, model_name=args.model, out_file=args.output)
     #classify_discrete(in_file=args.infile, output_p=args.posterior, model_name=args.model, out_file=args.output)
