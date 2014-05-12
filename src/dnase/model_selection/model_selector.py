@@ -257,7 +257,7 @@ def grid_search_models(train_cell_type, use_multiprocessing=False):
         for res_i, res in enumerate(_RESOLUTIONS):
             print('res: %i' % res)
             scores_matrix[res_i, :] = evaluate_resolution(training_dir=train_dir, res=res,
-                                               score_functions=score_functions)
+                                                          score_functions=score_functions)
 
     print('Finished')
     # p, k27 average, consistency
@@ -265,17 +265,21 @@ def grid_search_models(train_cell_type, use_multiprocessing=False):
             scores_matrix)
 
 
-def show_grid_search():
+def show_grid_search(path_to_save_plot=None):
+    """
+    Plot 2 score functions, merge close points
+    @param path_to_save_plot: path to save plot
+    """
     global _RESOLUTIONS, _MODEL_TYPES, _ALPHAS_OPENED
     import matplotlib.pyplot as plt
 
-    score_types = ['p', 'k27ac_enrichment', 'H3K27me3 enrichment', 'H3K36me3 enrichment', 'consistent']
+    score_types = ['p', 'H3K27Ac_enrichment', 'H3K27me3 enrichment', 'H3K36me3 enrichment', 'consistent']
     scores_matrix = np.load(
         os.path.join(RES_DIR, 'modelEvaluation', 'gridSearchScore-%s.npy' % (','.join(score_types))))
 
-    selected_scores = ['consistent', 'k27ac_enrichment']
+    selected_scores = ['H3K27Ac_enrichment', 'consistent']
     selected_score_indics = [score_types.index(score) for score in selected_scores]
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(1, 1, figsize=(16, 12))
     for model_i, model in enumerate(_MODEL_TYPES):
         data = []
         labels = []
@@ -293,7 +297,7 @@ def show_grid_search():
             if not keep[curr]:
                 continue
             same_res = (labels[:, 0] == p_label[0]) & ~np.all(labels == p_label, 1)
-            if np.all(np.abs(data[same_res, :]-p_data) < [0.5, 0.01]):
+            if np.all(np.abs(data[same_res, :] - p_data) < [0.9, 0.1]):
                 #data = data[~same_res, :]
                 #labels = labels[~same_res, :]
                 keep[same_res & ~curr] = False
@@ -323,16 +327,21 @@ def show_grid_search():
         labels = n_labels
         """
         labels = ['%i,a%i' % tuple(l) for l in labels]
-        ax.scatter(data[:, 0], data[:, 1], label=model, c='rb'[model_i])
+        ax.scatter(data[:, 0], data[:, 1], label=model, c='rb'[model_i], s=50)
         for i, txt in enumerate(labels):
-            ax.annotate(txt, data[i, :], size='xx-small')#, size=10, , rotation=15 * (-1 if model_i == 0 else 1)
-    plt.legend()
+            ax.annotate(txt, data[i, :], size='xx-small', alpha=0.6, rotation=0, xytext=(7, 1),
+                        textcoords='offset points')  #, size=10, , rotation=15 * (-1 if model_i == 0 else 1)
+    plt.legend(loc='lower right')
     plt.xlabel(selected_scores[0])
     plt.ylabel(selected_scores[1])
     plt.title('Model evaluation for different models')
-    resolutions = ','.join([str(s) for s in _RESOLUTIONS])
+    resolutions = ', '.join(['%ibp' % s if s < 1000 else '%ikb' % (s / 1000) for s in _RESOLUTIONS[::-1]])
     alphas = ','.join([str(s) for s in _ALPHAS_OPENED])
-    plt.figtext(0.4, 0.02, 'Resolutions: %s\nAlphas: %s' % (resolutions, alphas))
+    plt.figtext(0.4, 0.08, 'Resolutions: %s\nAlphas: %s' % (resolutions, alphas))
+
+    plt.tight_layout()
+    if path_to_save_plot is not None:
+        plt.savefig(path_to_save_plot)
     plt.show()
 
 
