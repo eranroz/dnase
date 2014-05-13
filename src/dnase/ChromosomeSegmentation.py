@@ -72,7 +72,7 @@ class ChromosomeSegmentation:
         # core features - loaded during construction
         self.feature_mapping = [SegmentationFeatures.Position, SegmentationFeatures.RegionLengths,
                                 SegmentationFeatures.OpenClosed]
-        self.markers = None
+        self.markers = []
 
 
     def _set_segmentation(self, segmentation):
@@ -123,7 +123,7 @@ class ChromosomeSegmentation:
                 self.feature_mapping.append(SegmentationFeatures.AverageAccessibility)
             elif feature == SegmentationFeatures.Markers:
                 extra_features.append(self._load_markers(arg))
-                self.feature_mapping.append(SegmentationFeatures.Markers)
+                self.feature_mapping += self.markers
             elif feature == SegmentationFeatures.Motifs:
                 extra_features.append(self._load_motifs())
                 self.feature_mapping.append(SegmentationFeatures.Motifs)
@@ -140,13 +140,36 @@ class ChromosomeSegmentation:
         Get regions matrix with specific features.
         @param features: features to get
         @return: matrix of regions data (rows: regions, columns: features (in same order))
+                for multiple columns features such as Markers use get_labels to get labels for columns
         """
         if not isinstance(features, list):
             features = [features]
         features_to_load = [f for f in features if f not in self.feature_mapping]
         self.load(features_to_load)
-        feature_indics = [self.feature_mapping.index(f) for f in features]
+        feature_indics = []
+        for f in features:
+            if f == SegmentationFeatures.Markers:
+                for marker in self.markers:
+                    feature_indics.append(self.feature_mapping.index(marker))
+            else:
+                feature_indics.append(self.feature_mapping.index(f))
+
         return self.data[:, feature_indics]
+
+    def get_labels(self, features):
+        """
+        Get the corresponding labels for get
+        @param features: request features
+        """
+        labels = []
+        for f in features:
+            if f == SegmentationFeatures.Markers:
+                for marker in self.markers:
+                    labels.append(marker)
+            else:
+                labels.append(SegmentationFeatures.name(f))
+        return labels
+
 
     def _load_average_accessibility(self):
         # load original dnase results and select only the required chromosome
@@ -157,31 +180,28 @@ class ChromosomeSegmentation:
         region_matrix = self.get([SegmentationFeatures.Position, SegmentationFeatures.RegionLengths])
         region_matrix[:, 1] += region_matrix[:, 0]
         # keep same size as the matrix of segmentations
-        avg_accessibility = np.zeros(region_matrix[-1, 1]+1)
-        avg_accessibility[0:np.minimum(region_matrix[-1, 1], accessibility_data.shape[0])] = accessibility_data[0:np.minimum(
-            region_matrix[-1, 1], accessibility_data.shape[0])]
+        avg_accessibility = np.zeros(region_matrix[-1, 1] + 1)
+        avg_accessibility[0:np.minimum(region_matrix[-1, 1], accessibility_data.shape[0])] = accessibility_data[
+                                                                                             0:np.minimum(
+                                                                                                 region_matrix[-1, 1],
+                                                                                                 accessibility_data.shape[
+                                                                                                     0])]
         region_accessibility = np.array([np.average(avg_accessibility[start:end]) for start, end in region_matrix])
         return region_accessibility
 
     def _load_markers(self, markers=None):
-        if markers is None:
-            markers = ['Histone_H2A.Z', 'Histone_H2AK5ac', 'Histone_H2BK120ac', 'Histone_H2BK12ac', 'Histone_H2BK15ac',
-                       'Histone_H2BK20ac', 'Histone_H2BK5ac', 'Histone_H3K14ac', 'Histone_H3K18ac', 'Histone_H3K23ac',
-                       'Histone_H3K23me2', 'Histone_H3K27ac', 'Histone_H3K27me3', 'Histone_H3K36me3', 'Histone_H3K4ac',
-                       'Histone_H3K4me1', 'Histone_H3K4me2', 'Histone_H3K4me3', 'Histone_H3K56ac', 'Histone_H3K79me1',
-                       'Histone_H3K79me2', 'Histone_H3K9ac', 'Histone_H3K9me3', 'Histone_H3T11ph', 'Histone_H4K20me1',
-                       'Histone_H4K5ac', 'Histone_H4K8ac', 'Histone_H4K91ac', 'Histone_H3K9me1' 'Histone_H2AK9ac']
-        #dataDownloader.download_experiment(self.cell_type, markers)
-        markers = SeqLoader.load_experiments(self.cell_type, markers, [self.chromosome])
-        # TODO: maybe select only significant markers
-        # TODO: always 20?
-        markers = SeqLoader.down_sample(markers, self.resolution / 20)
-
+        markers, experiments = SeqLoader.load_experiments(self.cell_type, markers, [self.chromosome],
+                                                          resolution=self.resolution)
+        markers = markers[self.chromosome]
+        self.markers = experiments
         region_matrix = self.get([SegmentationFeatures.Position, SegmentationFeatures.RegionLengths])
         region_matrix[:, 1] += region_matrix[:, 0]
-        marker_avg = np.array([np.average(markers[:, start:end], 1) for start, end in region_matrix])
+        marker_avg = np.zeros((region_matrix.shape[0], markers.shape[0]))
+
+        for reg_i, start_end in enumerate(region_matrix):
+            marker_avg[reg_i, :] = np.average(markers[:, start_end[0]:start_end[1]], 1).T
+
         return marker_avg
-        # TODO: sum any find of marker a more details map is preserved in markers
 
     def _load_has_ctcf_boundaries(self):
         # TODO: use specific cell type instead of hmec
