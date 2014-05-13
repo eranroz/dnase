@@ -1,5 +1,4 @@
 from hmm.bwiter import IteratorCondition
-from hmm.multivariatenormal import MultivariateNormal
 
 __author__ = 'eran'
 """
@@ -7,13 +6,11 @@ Test for Baum-Welch, or iterative backward forward
 """
 
 from hmm import bwiter
-from hmm.HMMModel import _ContinuousEmission, ContinuousHMM, GaussianHMM
+from hmm.HMMModel import ContinuousHMM, GaussianHMM
 import numpy as np
 import matplotlib.pyplot as plt
 
 from matplotlib.patches import Polygon
-
-__author__ = 'eran'
 
 
 def showPlot(realDice, bw_output):
@@ -62,20 +59,6 @@ def simple_continuous():
     ])
 
     #satet to outputs
-    beginEmission = np.ones(6)
-
-    fairEmission = np.ones(6) / 6  # all equal
-    #fairEmission=[0.1, 0.2, 0.1, 0.2, 0.2, 0.2]
-    unfairEmission = np.ones(6) / 10  # all equal to 1/10 and 6 to 0.5
-    unfairEmission[5] = 0.5
-
-    emission = np.array([beginEmission, fairEmission, unfairEmission])
-    con_emission = _ContinuousEmission(np.array([
-        [0, 1],
-        [2, 2],  # fair
-        [5, 1]  # unfair tends to 6
-    ]))
-
     initial_model = ContinuousHMM(state_transition, np.array([
         [0, 1],
         [2, 2],  # fair

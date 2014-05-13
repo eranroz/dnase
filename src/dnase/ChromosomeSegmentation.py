@@ -239,10 +239,10 @@ def load(cell_type, model, chromosomes=None):
     @param chromosomes: chromosomes to load
     """
     segmentation = SeqLoader.load_result_dict(model.segmentation_file_path())
-
+    chromosomes = chromosomes or segmentation.keys()
     seg_dict = dict()
     #items = list(segmentation.items())
-    for chromosome in segmentation:
+    for chromosome in chromosomes:
         seg = segmentation[chromosome]
         seg_dict[chromosome] = ChromosomeSegmentation(cell_type, seg, chromosome, model)
     return seg_dict
