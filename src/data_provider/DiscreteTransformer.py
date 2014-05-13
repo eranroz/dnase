@@ -29,7 +29,7 @@ class DiscreteTransformer(object):
         if self.percentiles_values is None:
             self.percentiles_values = np.percentile(lg_data_n_zero, q=self.percentiles)
 
-        mapped2 = np.zeros(len(lg_data_n_zero)) * len(self.percentiles_values)
+        mapped2 = np.zeros(len(lg_data_n_zero), dtype=int)# * len(self.percentiles_values)
         for i, bounds in enumerate(self.percentiles_values):
             mapped2[lg_data_n_zero > bounds] = i + 1
         return mapped2
