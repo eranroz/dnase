@@ -22,8 +22,9 @@ class MultivariateNormal(object):
 
         d = cov.shape[0]
         s, u = np.linalg.eigh(cov)
+        s = np.maximum(s, 0)
         s_pinv = np.array([0 if abs(x) < 1e-5 else 1 / x for x in s], dtype=float)
-        #self.prec_U = np.multiply(u, np.sqrt(s_pinv))
+        self.prec_U = np.multiply(u, np.sqrt(s_pinv))
         pdet = np.prod(s[s > 1e-5])
         self.norm_p = d * np.log(2 * np.pi) + np.log(pdet)
         self.inv_cov = np.linalg.inv(cov)
@@ -52,6 +53,7 @@ class MultivariateNormal(object):
         return maha
 
     def pdf(self, x):
+        #return np.exp(np.maximum(self.log_pdf(x), -650))
         x = x.T-self.mean
         x_cov = np.dot(x, self.inv_cov)
         p = np.sum(x_cov * x, 1)

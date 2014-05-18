@@ -6,7 +6,7 @@ import numpy as np
 from abc import ABCMeta, abstractmethod
 from collections import namedtuple
 from pyx import _hmmc
-
+from math import fsum
 
 class HMMModel(object):
     """
@@ -206,7 +206,6 @@ class HMMModel(object):
         dot = np.dot  # shortcut for performance
         real_transitions_T = state_trans_mat[1:, 1:].T.copy(order='C')
         real_transitions_T2 = state_trans_mat[1:, 1:].copy(order='C')
-        summing_arr = np.ones(n_states - 1)
 
         # emission * transition
         e_trans = iter(emission_seq[1:, :, None] * real_transitions_T)
@@ -227,13 +226,15 @@ class HMMModel(object):
         tup[1][...] /= tup[2]
         prev_forward = tup[1]
 
+        summing_arr = np.ones(n_states - 1)
         #recursion step
         for tup in forward_iterator:  #emission_i, forward_i,scaling_i
             prev_forward = dot(next(e_trans), prev_forward)  #== tup[0]*dot(real_transitions_T, prev_forward)
 
             # scaling - see Rabiner p. 16, or Durbin p. 79
             scaling = tup[2]
-            scaling[...] = dot(summing_arr, prev_forward)  # dot is actually faster then np.sum(prev_forward)
+            #scaling[...] = dot(summing_arr, prev_forward)  # dot is actually faster then np.sum(prev_forward)
+            scaling[...] = fsum(prev_forward)  # fsum is more numerical stable
             tup[1][...] = prev_forward = prev_forward / scaling
 
         forward = forward_iterator.operands[1]
@@ -653,9 +654,9 @@ class GaussianHMM(HMMModel):
 
                 seq_min_mean = seq - old_mean.T
                 new_cov = np.dot((seq_min_mean * gamma_c), seq_min_mean.T) / state_norm[state]
-                if np.any(new_cov<0):
-                    new_cov = np.maximum(new_cov, 0)
-                new_cov = np.sqrt(new_cov)
+                #if np.any(new_cov < 0):
+                #    new_cov = np.maximum(new_cov, 0)
+                #new_cov = np.sqrt(new_cov)
                 # the diagonal must be large enough
                 np.fill_diagonal(new_cov, np.maximum(np.diag(new_cov), min_std))
                 #if is_mixture:
