@@ -17,7 +17,7 @@ import logging
 import numpy as np
 
 from config import DATA_DIR, PUBLISH_DIR, MEAN_MARKERS, PUBLISH_URL_PATH, BED_GRAPH_TO_BIG_WIG, CHROM_SIZES
-
+import re
 
 __author__ = 'eran'
 
@@ -316,7 +316,36 @@ def load_result_dict(output_filename):
             return sequence_dict
 
 
-def load_experiments(cell_type, experiments=None, chromosomes=None):
+def available_experiments(cell_type, experiments=None):
+        """
+        @param experiments: name of experiments to check for availability
+        @param cell_type: cell type to locate experiments for
+        @return: mapping between available experiments and the file path
+        @rtype: dict
+        @raise Exception:
+        """
+        warn = experiments is not None
+        experiments_to_load = os.listdir(MEAN_MARKERS) if experiments is None else experiments
+        available_ex = dict()
+        for ex in experiments_to_load:
+            ex_dir = os.path.join(MEAN_MARKERS, ex)
+            if not os.path.exists(ex_dir):
+                raise Exception("Data for experiment %s isn\'t available" % ex)
+            ex_cell_type_dir = os.path.join(ex_dir, cell_type)
+            # fallback to find similar cell type
+            if not os.path.exists(ex_cell_type_dir):
+                # may be different naming fetal_brain => brain_fetal
+                ex_cell_type_dir = os.path.join(ex_dir, re.sub('fetal_(.+)', '\\1_fetal', cell_type))
+                if not os.path.exists(ex_cell_type_dir):
+                    if warn:
+                        logging.warning('Cell type %s not found for expirment %s' % (cell_type, ex))
+                    continue
+            mean_file = os.path.join(ex_cell_type_dir, 'mean.npz')
+            available_ex[ex] = mean_file
+        return available_ex
+
+
+def load_experiments(cell_type, experiments=None, chromosomes=None, resolution=20):
     """
     Generic function to access experiments data of "markers", such as methylations and acetylations.
     Since it is common that we don't have the experiment data for the specific sample
@@ -333,41 +362,47 @@ def load_experiments(cell_type, experiments=None, chromosomes=None):
     @raise Exception: In case of data not available in MEAN_MARKERS
     @rtype : dict
     """
-    if experiments is None:
-        experiments = os.listdir(MEAN_MARKERS)
+    from scipy.sparse import lil_matrix, vstack, csr_matrix
+
     res_dict = dict()
-    for ex in experiments:
-        ex_dir = os.path.join(MEAN_MARKERS, ex)
-        if not os.path.exists(ex_dir):
-            raise Exception("Data for experiment %s isn\'t available" % ex)
-        ex_cell_type_dir = os.path.join(ex_dir, cell_type)
-        # fallback to find similar cell type
-        if not os.path.exists(ex_cell_type_dir):
-            logging.debug('Cell type not found. Falling back to similar cell type ')
-            possible_cells = [cell for cell in os.listdir(ex_dir) if cell_type in cell]
-            if not any(possible_cells):
-                raise Exception('No data exist for this cell type')
-            ex_cell_type_dir = os.path.join(ex_dir, possible_cells[0])
-        mean_file = os.path.join(ex_cell_type_dir, 'mean.npz')
+    experiment_mapping = available_experiments(cell_type, experiments)
+    existing_experiments = experiment_mapping.keys()
+    n_expiremnts = len(list(experiment_mapping.keys()))
+    for ex_i, mean_file in enumerate(experiment_mapping.values()):
         mean_data = load_result_dict(mean_file)
 
         chromosomes_to_load = mean_data.keys() if chromosomes is None else chromosomes
         for chromosome_key in chromosomes_to_load:
             chromosome_value = mean_data[chromosome_key]
+            if resolution != 20:
+                chromosome_value = down_sample(chromosome_value, resolution//20)
             # add to combined dictionary
             if chromosome_key not in res_dict:
-                combined = np.zeros((len(experiments), chromosome_value.shape[0]))
-                combined[0, 0:chromosome_value.shape[0]] = chromosome_value
+                #combined = np.zeros((n_expiremnts, chromosome_value.shape[0]))
+                #combined[ex_i, :] = chromosome_value
+                combined = csr_matrix(chromosome_value)
             else:
                 existing_val = res_dict[chromosome_key]
                 # extend number of columns if necessary
                 if existing_val.shape[1] < chromosome_value.shape[0]:
-                    combined = np.zeros((len(experiments), chromosome_value.shape[0]))
+                    #combined = np.zeros((n_expiremnts, chromosome_value.shape[0]))
+                    existing_val = existing_val.todense()
+                    combined = np.zeros((existing_val.shape[0], chromosome_value.shape[0]))
                     combined[:, 0:existing_val.shape[1]] = existing_val
-                combined[-1, 0:chromosome_value.shape[0]] = chromosome_value
+                    combined = csr_matrix(combined)
+                    #combined[:ex_i, 0:existing_val.shape[1]] = existing_val[:ex_i, :]
+                else:
+                    combined = existing_val
+
+                combined = vstack([combined, csr_matrix(chromosome_value)])
+                #combined[ex_i, 0:chromosome_value.shape[0]] = chromosome_value
 
             res_dict[chromosome_key] = combined
-    return res_dict
+
+    # for now don't spread sparse matrix around out of the function scope
+    for k in res_dict.keys():
+        res_dict[k] = res_dict[k].todense()
+    return res_dict, existing_experiments
 
 
 def load_dict(name, resolution=20, transform=None, directory=DATA_DIR, chromosome=None, orig_resolution=20):
@@ -383,6 +418,9 @@ def load_dict(name, resolution=20, transform=None, directory=DATA_DIR, chromosom
     """
     if os.path.exists(os.path.join(directory, '%s.%i.npz' % (name, orig_resolution))):
         sequence_dict = load_result_dict(os.path.join(directory, '%s.%i.npz' % (name, orig_resolution)))
+    elif os.path.exists(os.path.join(directory, name)):
+        sequence_dict = load_result_dict(os.path.join(directory, name))
+        logging.warning('loading file %s with no resolution in its name. Assuming 20' % name)
     else:
         file_name = os.path.join(directory, '%s.%i.pkl' % (name, orig_resolution))
         try:
