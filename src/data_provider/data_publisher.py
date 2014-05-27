@@ -26,12 +26,10 @@ type bigWig
 autoScale on
 
 
-""".format(**({
-                                     'track_name': track_name.replace('[', '_').replace(']', '_'),
-                                     'url_name': url_name,
-                                     'short_label': short_label,
-                                     'long_label': long_label
-                                 }))
+""".format(**({'track_name': track_name.replace('[', '_').replace(']', '_'),
+               'url_name': url_name,
+               'short_label': short_label,
+               'long_label': long_label}))
     with open(tracks_db_path, 'a') as tracks_file:
         tracks_file.write(track_config)
 
@@ -85,14 +83,17 @@ email {email}
     for g in genomes:
         os.makedirs(os.path.join(PUBLISH_DIR, g))
 
+
 if __name__ == "__main__":
     import argparse
     import numpy as np
+
     parser = argparse.ArgumentParser()
     parser.add_argument('file', help="npz file to publish")
     parser.add_argument('--name', help="name of the published track")
     parser.add_argument('--short_label', help="short label for the published track")
     parser.add_argument('--long_label', help="long label (description) for the published track")
+    parser.add_argument('--file_resolution', dtype=int, help="resolution of the npz file (bin sizes)", default=20)
     args = parser.parse_args()
     data = SeqLoader.load_result_dict(args.file)
     data2 = dict()
@@ -102,6 +103,6 @@ if __name__ == "__main__":
         v = np.array(v)
         las = np.where(v > 0)[0]
         data2[k] = v[:las[-1]]
-    publish_dic(data2, 20, args.name or os.path.basename(args.file),
+    publish_dic(data2, args.file_resolution, args.name or os.path.basename(args.file),
                 short_label=args.short_label or os.path.basename(args.file),
                 long_label=args.long_label or os.path.basename(args.file))
