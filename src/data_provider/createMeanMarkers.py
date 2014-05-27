@@ -1,6 +1,10 @@
 """
+Script for combining multiple samples to 1 "mean".
+
+1. markers (histone modifications)
 Script for transforming directory of wig files of specific cell type
 to a pkl file with mean of all samples within directory
+2. dnase-seq/chromatin accessibility data
 """
 import argparse
 import os
@@ -8,7 +12,7 @@ import subprocess
 
 import numpy as np
 
-from config import WIG_TO_BIG_WIG, BIG_WIG_TO_BED_GRAPH, CHROM_SIZES
+from config import WIG_TO_BIG_WIG, BIG_WIG_TO_BED_GRAPH, CHROM_SIZES, MEAN_DNASE_DIR, NCBI_DIR
 from data_provider import SeqLoader
 
 #from multiprocessing.pool import Pool
@@ -28,7 +32,7 @@ def transform_directory(input_dir, output_dir, skip_working=False):
 
     #global _pool_process
     files = [f for f in os.listdir(input_dir)]
-    random.shuffle(files)  # shuffle so it won't get stacked with other processes
+    random.shuffle(files)  # shuffle so it won't get stacked with other processes (if you run it in multiple processes)
     if len(files) == 0:
         return
     print('trasnforming dir: %s=>%s ' % (input_dir, output_dir))
@@ -54,6 +58,8 @@ def transform_directory(input_dir, output_dir, skip_working=False):
         print('trasnforming files: %s=>%s ' % (input_dir, output_dir))
         #pool_process = Pool(2)
         #_pool_process.map(do_transform, getTransforms(input_dir, output_dir))
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
         for a in get_transforms(input_dir, output_dir):
             wig_to_bed_graph(a)
         # join bgs and delete them
@@ -130,11 +136,74 @@ def get_transforms(input_dir, output_dir):
                 yield (i_name, o_name)
 
 
+def cell_type_mean_dnase(cell_type):
+    """
+    Creates mean for specific cell type
+    @param cell_type: cell type
+    @return:
+    """
+    out_file = os.path.join(MEAN_DNASE_DIR, '%s.mean.npz' % cell_type)
+    print(cell_type)
+    if os.path.exists(out_file):
+        print('skipping cell type - already have mean')
+
+    cell_data = []
+    cell_type_dir = os.path.join(NCBI_DIR, cell_type)
+    for sample in os.listdir(cell_type_dir):
+        if '.wig' in sample:
+            continue
+        print('loading %s' % sample)
+        data = SeqLoader.load_dict(sample.replace('.20.pkl', '').replace('.20.npz', ''), 20, directory=cell_type_dir)
+        cell_data += [data]
+    if len(cell_data) == 0:
+        return
+    cell_represent = dict()
+    for chrom in cell_data[0].keys():
+        print('mean for chromosome %s'%chrom)
+        max_length = max([len(d[chrom]) for d in cell_data])
+        combined = np.zeros((len(cell_data), max_length))
+        for i, d in enumerate(cell_data):
+            combined[i, 0:len(d[chrom])] = d[chrom]
+        cell_represent[chrom] = combined.mean(0)
+    print('Saving result dict')
+    SeqLoader.save_result_dict(out_file, cell_represent)
+    print('Finished creating file for %s' % cell_type)
+
+
+def cell_type_mean_dir():
+    """
+    Create mean dnase for each cell type
+    """
+    from multiprocessing.pool import Pool
+
+    pool_process = Pool()
+    pool_process.map(cell_type_mean_dnase, os.listdir(NCBI_DIR))
+
+
 if __name__ == "__main__":
+    #examples:
+    #in_dir = "/cs/cbio/eranroz/dnase/other_data/markers/RRBS/lung_fetal"
+    #out_dir = "/cs/cbio/eranroz/dnase/other_data/npzMarkers/RRBS/lung_fetal"
+    #transform_directory(in_dir, out_dir)
+    #cell_type_mean_dnase("kidney_fetal")
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('input', help="Input directory")
-    parser.add_argument('output', help="Output directory")
+    parser.add_argument('command', help="mean_dnase (mean different dnase samples in same directory) or" +
+                                        " mean_markers (mean for histone modification/RRBS in same directory)")
+    parser.add_argument('--input', help="Input directory")
+    parser.add_argument('--output', help="Output directory")
+    parser.add_argument('--cell_type', help="Cell type to mean")
     parser.add_argument('--skip', help="Skip directories that have bg files", default=False, type=bool)
     args = parser.parse_args()
     print((args.skip, args.input, args.output))
-    transform_directory(args.input, args.output, args.skip)
+    if args.command == 'mean_markers':
+        if not args.input or not args.output:
+            print('input and output arguments are required for mean markers')
+            raise Exception
+        transform_directory(args.input, args.output, args.skip)
+    elif args.command == 'mean_dnase':
+        if not args.cell_type:
+            print('cell_type argument is required for mean dnase')
+            raise Exception
+        cell_type_mean_dnase(args.cell_type)
+
