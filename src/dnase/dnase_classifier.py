@@ -90,15 +90,15 @@ class DNaseClassifier(object):
         @param infile: input file
         """
         transformer = self.strategy.data_transform()
-        data = SeqLoader.load_dict(infile, resolution=self.resolution, transform=transformer,
+        data = SeqLoader.load_dict(os.path.basename(infile), resolution=self.resolution, transform=transformer,
                                    directory=os.path.dirname(infile) or DATA_DIR)  # TODO: can load only partial
         self.fit([data])
 
-    def classify_file(self, file_name, chromosomes=None):
+    def classify_file(self, file_name, chromosome=None):
         transformer = self.strategy.data_transform()
 
         data = SeqLoader.load_dict(file_name, resolution=self.resolution, transform=transformer,
-                                   directory=os.path.dirname(file_name) or DATA_DIR, chromosomes=chromosomes)
+                                   directory=os.path.dirname(file_name) or DATA_DIR, chromosome=chromosome)
         return self.classify([data])
 
     def save_classify_file(self, file_name, out_file, save_raw=True, save_npz=True, save_bg=True):
@@ -112,7 +112,7 @@ class DNaseClassifier(object):
         """
         transformer = self.strategy.data_transform()
 
-        data = SeqLoader.load_dict(file_name, resolution=self.resolution, transform=transformer,
+        data = SeqLoader.load_dict(os.path.basename(file_name), resolution=self.resolution, transform=transformer,
                                    directory=os.path.dirname(file_name) or DATA_DIR)
         path_to_save = self.model_dir()
         if save_raw:

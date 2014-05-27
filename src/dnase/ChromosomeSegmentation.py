@@ -229,16 +229,21 @@ class ChromosomeSegmentation:
         raise NotImplementedError
 
 
-def load(cell_type, model, chromosomes=None):
+def load(cell_type, model, chromosomes=None, segmentation=None):
     """
     Loads genome or sub genome and assigns states for specific cell type with the given segmentation
 
+    @param segmentation: segmentation to use or none (for uniform model segmentation)
     @type model: DNaseClassifier
     @param model: model used for creating segmentation
     @param cell_type: name of cell type to analyze
     @param chromosomes: chromosomes to load
     """
-    segmentation = SeqLoader.load_result_dict(model.segmentation_file_path())
+
+    if segmentation is None:
+        # in that case a uniform segmentation for all based on model segmentation
+        segmentation_file = model.segmentation_file_path()
+        segmentation = SeqLoader.load_result_dict(segmentation_file)
     chromosomes = chromosomes or segmentation.keys()
     seg_dict = dict()
     #items = list(segmentation.items())
