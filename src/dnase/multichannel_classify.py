@@ -34,7 +34,7 @@ import datetime
 
 import numpy as np
 
-from config import NCBI_DIR, BED_GRAPH_RESULTS_DIR, MEAN_DNASE_DIR, MODELS_DIR, RES_DIR
+from config import OTHER_DATA, NCBI_DIR, BED_GRAPH_RESULTS_DIR, DATA_DIR, MEAN_DNASE_DIR, MODELS_DIR, RES_DIR
 from data_provider import SeqLoader
 from data_provider.data_publisher import publish_dic
 from dnase.dnase_classifier import DNaseClassifier
@@ -42,49 +42,10 @@ from dnase.HMMClassifier import HMMClassifier
 from hmm import bwiter
 from hmm.HMMModel import DiscreteHMM, GaussianHMM
 from hmm.multivariatenormal import MultivariateNormal
+from data_provider import data_publisher
 
 
 __author__ = 'eranroz'
-
-
-def cell_type_mean_specific(cell_type):
-    """
-    Creates mean for specific cell type
-    @param cell_type: cell type
-    @return:
-    """
-    out_file = os.path.join(MEAN_DNASE_DIR, '%s.mean.npz' % cell_type)
-    print(cell_type)
-    #if os.path.exists(out_file):
-    #    print('skipping cell type - already have mean')
-
-    cell_data = []
-    cell_type_dir = os.path.join(NCBI_DIR, cell_type)
-    for sample in os.listdir(cell_type_dir):
-        if '.wig' in sample:
-            continue
-        data = SeqLoader.load_dict(sample.replace('.20.npz', ''), 20, directory=cell_type_dir)
-        cell_data += [data]
-    if len(cell_data) == 0:
-        return
-    cell_represent = dict()
-    for chrom in cell_data[0].keys():
-        max_length = max([len(d[chrom]) for d in cell_data])
-        combined = np.zeros((len(cell_data), max_length))
-        for i, d in enumerate(cell_data):
-            combined[i, 0:len(d[chrom])] = d[chrom]
-        cell_represent[chrom] = combined.mean(0)
-    SeqLoader.save_result_dict(out_file, cell_represent)
-
-
-def cell_type_mean():
-    """
-    Create mean dnase for each cell type
-    """
-    from multiprocessing.pool import Pool
-
-    pool_process = Pool()
-    pool_process.map(cell_type_mean_specific, os.listdir(NCBI_DIR))
 
 
 def load_multichannel(resolution=100, chromosomes=None):
@@ -99,6 +60,7 @@ def load_multichannel(resolution=100, chromosomes=None):
 
     all_cells = []
     cell_types_paths = [os.path.join(MEAN_DNASE_DIR, cell_type) for cell_type in os.listdir(MEAN_DNASE_DIR)]
+    #cell_types_paths = [os.path.join(MEAN_DNASE_DIR, cell_type) for cell_type in os.listdir(MEAN_DNASE_DIR)][:4]  # 4 is for debug
     for cell_type_path in cell_types_paths:
         print('Loading %s' % cell_type_path)
         cell_data = SeqLoader.load_result_dict(cell_type_path)
@@ -106,10 +68,11 @@ def load_multichannel(resolution=100, chromosomes=None):
 
         for k in (cell_data.keys() if chromosomes is None else chromosomes):
             cell_data_new[k] = scipy.sparse.coo_matrix(
-                SeqLoader.down_sample(cell_data[k], resolution / 20))  #csr_matrix
+                SeqLoader.down_sample(cell_data[k], resolution / 20))  #  TODO: use csr_matrix or coo_matrix?
         all_cells.append(cell_data_new)
 
-    # organize by chromosomes
+
+    # organize be chromosomes
     if chromosomes is None:
         chromosomes = all_cells[0].keys()
     chrom_dic = dict()
@@ -121,28 +84,19 @@ def load_multichannel(resolution=100, chromosomes=None):
                 tmp = np.zeros(max_length)
                 tmp[0:cell[chrom].shape[1]] = cell[chrom].todense()
                 rows_matrices.append(scipy.sparse.coo_matrix(tmp))
-                #rows_matrices.append(
-                #    np.hstack([cell[chrom], scipy.sparse.coo_matrix(np.zeros(max_length - cell[chrom].shape[1]))]))
             else:
                 rows_matrices.append(cell[chrom])
+            chrom_mat = scipy.sparse.vstack(rows_matrices)
 
-        chrom_mat = scipy.sparse.vstack(rows_matrices)
-        """
-        chrom_mat = np.zeros((len(all_cells), max_length))
-        for cell_i, cell in enumerate(all_cells):
-            chrom_mat[cell_i, 0:len(cell[chrom])] = cell[chrom]
-        """
         chrom_dic[chrom] = chrom_mat
     return chrom_dic
 
 
-def pca_chrom_matrix(data, dim=None):
+def pca_chrom_matrix(data, dim=None, min_energy=0.8):
     new_data = dict()
-    mean = np.mean(data, 1)
-    # move to center
-    data = data-mean[None, :]
     for k, chrom_matrix in data.items():
-        co_var = np.cov(chrom_matrix - np.mean(chrom_matrix, 1)[:, None])
+        chrom_matrix_centered = chrom_matrix - np.mean(chrom_matrix, 1)[:, None]
+        co_var = np.cov(chrom_matrix_centered)
         eig_vals, eig_vecs = np.linalg.eig(co_var)
         eig_order = eig_vals.argsort()[::-1]  # just to be sure we have eigvalues ordered
         eig_vals = eig_vals[eig_order] / np.sum(eig_vals)
@@ -150,11 +104,11 @@ def pca_chrom_matrix(data, dim=None):
         if dim is None:
             explains2 = np.cumsum(eig_vals)  # TODO: replace the next with it
             explains = [np.sum(eig_vals[0:d + 1]) for d in np.arange(0, len(eig_vals))]
-            dim = [d for d, ex in enumerate(explains) if ex > 0.8][0]
+            dim = [d for d, ex in enumerate(explains) if ex > min_energy][0]
 
-        pca_matrix = np.dot(eig_vecs[0:dim, :], cell_type_mean())
+        pca_matrix = np.dot(eig_vecs[0:dim, :], chrom_matrix_centered)
         new_data[k] = pca_matrix
-    return pca_matrix
+    return new_data
 
 
 def multichannel_discrete_transform(data, percentiles=[60, 75, 90]):
@@ -218,8 +172,7 @@ def multichannel_hmm_discrete(resolution, model_name=None, output_p=False, out_f
     # many cell types are expected to behave similarly
     # so it will be more efficient to reduce dimensions here
     cells_dimensions = 5
-
-    multichannel_data = pca_chrom_matrix(multichannel_data)  #, cells_dimensions_
+    multichannel_data = pca_chrom_matrix(multichannel_data)  # , cells_dimensions_
 
     # discrete transform
     multichannel_data = multichannel_discrete_transform(multichannel_data)
@@ -283,7 +236,200 @@ def multichannel_hmm_discrete(resolution, model_name=None, output_p=False, out_f
         print('Writing result file (pkl format)')
         SeqLoader.save_result_dict(npz_file_name, classified_seq)
         print('Writing raw file')
-        SeqLoader.publish_dic(multichannel_data, resolution, '%s.%i.rawDiscrete' % (default_name, resolution))
+        data_publisher.publish_dic(multichannel_data, resolution, '%s.%i.rawDiscrete' % (default_name, resolution))
+
+
+def soft_k_means_step(data, clusters):
+    """
+    Soft k means
+    @param data: data to cluster
+    @param clusters: number of clusters
+    @return: new clusters means
+    """
+    W = np.array([np.sum(np.power(data - c, 2), axis=1) for c in clusters])
+    W = np.minimum(W, 500)  # 500 is enough (to eliminate underflow)
+    W = np.exp(-W)
+    W = W / np.sum(W, 0)  # normalize for each point
+    W = W / np.sum(W, 1)[:, None]  # normalize for all cluster
+    new_clusters = np.dot(W, data)
+    diff = np.sum((new_clusters - clusters) ** 2, axis=1)
+    print(diff)
+    return new_clusters
+
+
+def continuous_state_selection(data, num_states=None, visualize=False):
+    """
+    Heuristic creation of emission for states in continuous multidimensional model.
+    Instead of random selection of the emission matrix we find clusters of co-occurring values,
+    and use those clusters as means for states and the close values as estimation for covariance matrix
+
+    @param visualize: whether to visualize the state selection
+    @param num_states: number of states in model
+    @param data: dense data for specific chromosome
+    @return: initial emission for gaussian mixture model HMM (array of (mean, covariance)
+    """
+    data = data.T
+    if visualize:
+        from matplotlib.pylab import plt
+        # TODO: we can use PCA but for now just select 2 randoms dimensions
+        dims = [2, 1]  #np.random.permutation(np.arange(data.shape[1]))[:2]
+        plt.hexbin(data[:, dims[0]], data[:, dims[1]], alpha=0.7, edgecolors='w', cmap=plt.cm.OrRd,
+                   extent=[np.floor(np.min(data[:, dims[0]]) - 1.0), np.ceil(np.max(data[:, dims[0]])),
+                           np.floor(np.min(data[:, dims[1]]) - 1.0), np.ceil(np.max(data[:, dims[1]]))], bins='log')  #
+
+    sub_indics = np.random.permutation(np.arange(data.shape[0] - data.shape[0] % 4))
+    """
+    # select sample for spectral clustering. spectral clustering
+    # is used to assign number of states
+    sub_data = data[sub_indics[:2000], :]
+    scale = 0.5
+    affinity_matrix = np.exp(-pdist(sub_data, 'sqeuclidean')/(2*scale**2))
+    affinity_matrix = squareform(affinity_matrix)
+    np.fill_diagonal(affinity_matrix, 0)
+    D = np.diag(1.0/np.sum(affinity_matrix, 1))
+    L = np.dot(np.dot(D, affinity_matrix), D)
+    eigvalues = np.linalg.eigvals(L)
+    # sort by eigenvalues
+    eigvalues = eigvalues[eigvalues.argsort()[::-1]]
+    # select number of components according to eigvalues
+    n_clusters = np.diff((eigvalues[eigvalues > 0])/np.sum(eigvalues[eigvalues > 0])) # 6
+
+    n_clusters = np.where(n_clusters > -1e-3)[0]
+    n_clusters = np.ceil((n_clusters[0]*0.8 + n_clusters[1]*0.2))
+    """
+    n_clusters = num_states or data.shape[1] * 2  # number of clustering will be subject to pruning
+
+
+    clusters = np.random.random((n_clusters, data.shape[1])) * np.max(data)
+
+    if visualize:
+        plt.title('Chromatin accessibility')
+        plt.xlabel('Heart [log (x+1))]')
+        plt.ylabel('Gastric [log (x+1)]')
+        plt.savefig(os.path.join(RES_DIR, "multivariateHeartVsGastric.png"))
+        h1 = plt.scatter(clusters[: dims[0]], clusters[: dims[0]], c='b', marker='*')
+        plt.ion()
+        plt.show()
+
+    # once we have assumption for clusters work with real sub batches of the data
+    sub_indics = sub_indics.reshape(4, -1)
+
+    different_clusters = False
+    while not different_clusters:
+        for step in range(5):
+            sub_data = data[sub_indics[step % 4], :]
+            clusters = soft_k_means_step(sub_data, clusters)
+        if visualize:
+            h1.set_offsets(clusters[:, dims])
+            plt.draw()
+            #time.sleep(0.2)
+        if num_states:
+            different_clusters = True
+        else:
+            dist_matrix = np.array([np.sum(np.power(clusters - c, 2), axis=1) for c in clusters])
+            np.fill_diagonal(dist_matrix, 1000)
+            closest_cluster = np.min(dist_matrix)
+
+            if closest_cluster < 0.1:
+                # pruning the closest point and add random to close points
+                subject_to_next_prune = list(set(np.where(dist_matrix < 0.1)[0]))
+                clusters[subject_to_next_prune, :] += 0.5 * clusters[subject_to_next_prune, :] * np.random.random(
+                    (len(subject_to_next_prune), data.shape[1]))
+                clusters = clusters[np.arange(n_clusters) != np.where(dist_matrix == closest_cluster)[0][0], :]
+                n_clusters -= 1
+            else:
+                different_clusters = True
+
+    # now assign points to clusters
+    clusters = clusters[np.argsort(np.sum(clusters ** 2, 1))]  # to give some meaning
+    W = np.array([np.sum(np.power(data - c, 2), axis=1) for c in clusters])
+    W = np.minimum(W, 500)  # 500 is enough (to eliminate underflow)
+    W = np.exp(-W)
+    W = W / np.sum(W, 0)  # normalize for each point
+    W = W / np.sum(W, 1)[:, None]  # normalize for all cluster
+    means = np.dot(W, data)
+    covs = []
+    min_std = np.finfo(float).eps
+    for mu, p in zip(means, W):
+        seq_min_mean = data - mu
+        new_cov = np.dot((seq_min_mean.T * p), seq_min_mean)
+        new_cov = np.maximum(new_cov, min_std)
+        covs.append(new_cov)
+    means_covs = list(zip(means, covs))
+    """
+        n_clusters = len(set(clusters_assignments))
+        means_covs = [data[clusters_assignments == i, :] for i in set(clusters_assignments)]
+        means_covs = [(np.mean(sub_pop, 0), np.cov(sub_pop.T)) for sub_pop in means_covs]
+        # sort them base on the distance from 0 (to keep it nice)
+        means_covs.sort(key=lambda x: np.sum(x[0]**2))
+        """
+    if visualize:
+        w_size = 1000.0
+
+        x, y = np.meshgrid(*[np.arange(np.floor(np.min(data[:, d]) - 1.0), np.ceil(np.max(data[:, d])),
+                                       (np.ceil(np.max(data[:, d])) - np.floor(np.min(data[:, d])) + 1.0) / w_size) for
+                             d in dims])
+        pos = np.array([x.ravel(), y.ravel()])
+        for mean, cov in means_covs:
+            rv = MultivariateNormal(mean[dims], cov[:, dims][dims, :])
+
+            z = rv.pdf(pos)
+            z[z < 0.1] = np.nan
+            plt.contourf(x, y, z.reshape((w_size, w_size)), alpha=0.8, vmin=0, vmax=1)
+
+        plt.draw()
+        plt.ioff()
+        plt.savefig(os.path.join(RES_DIR, "multivariateHeartVsGastricStates.png"))
+        plt.show()
+    return means_covs
+
+
+def multichannel_hmm_continuous(resolution=1000, model_name=None, output_p=False, out_file=None):
+    """
+    Use multichannel HMM to classify DNase
+
+    continuous approach (multivariate gaussian mixture model)
+    @param resolution: rsolution to learn
+    """
+    if model_name is None:
+        model_name = 'multichannel%i' % resolution
+    all_chromotomes = ['chr8']
+    train_chrom = 'chr8'
+    sparse_data = load_multichannel(resolution, all_chromotomes)
+    # log(x+1) transform
+    genome_classification = dict()
+    chromosomes = list(sparse_data.keys())
+    chromosomes.remove(train_chrom)
+    chromosomes.insert(0, train_chrom)
+    np.seterr(all='raise')
+    n_states = 4  # just for debug
+    for chrom in chromosomes:
+        sparse_data[chrom].data = np.log(sparse_data[chrom].data + 1)
+        chrom_data = sparse_data[chrom].todense()
+        # create emission matrix by initial guess based on simple clustering
+        chrom_data = np.array(chrom_data)  # nd array is cool. matrix not cool
+        if train_chrom == chrom:
+
+            emission = continuous_state_selection(chrom_data, num_states=n_states)
+            n_states = len(emission) + 1  # number of states plus begin state
+            state_transition = np.random.random((n_states, n_states))
+            # fill diagonal with higher values
+            np.fill_diagonal(state_transition, np.sum(state_transition, 1))
+            state_transition[:, 0] = 0  # set transition to begin state to zero
+            # normalize
+            state_transition /= np.sum(state_transition, 1)[:, np.newaxis]
+            # initial guess
+            initial_gaussian_model = GaussianHMM(state_transition, emission)
+            # train
+            new_model, p = bwiter.bw_iter(chrom_data, initial_gaussian_model, 10)
+
+        # decode data
+        genome_classification[chrom] = new_model.viterbi(chrom_data)
+
+    # save
+    if not os.path.exists(os.path.join(MODELS_DIR, model_name)):
+        os.makedirs(os.path.join(MODELS_DIR, model_name))
+    SeqLoader.save_result_dict(os.path.join(MODELS_DIR, model_name, "segmentation"), genome_classification)
 
 
 def soft_k_means_step(data, clusters):
