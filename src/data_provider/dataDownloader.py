@@ -36,7 +36,7 @@ def setup_environment():
 
         urlret = urllib.urlretrieve
     for tool in tools:
-        if os.path.exists(os.path.join(BIN_DIR, tool)):
+        if not os.path.exists(os.path.join(BIN_DIR, tool)):
             urlret("http://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/%s" % tool,
                    os.path.join(BIN_DIR, tool))
 
