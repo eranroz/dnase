@@ -19,7 +19,7 @@ class MarkerEnrichmentScorer(BaseScoreModel):
     * H3K27Ac modification is common in open regions
     """
     def __init__(self, train_cell_type, score_chromosome, signal_type='H3K27ac'):
-        signal = SeqLoader.load_experiments(train_cell_type.split('_')[0], [signal_type], [score_chromosome])[score_chromosome]
+        signal, _ = SeqLoader.load_experiments(train_cell_type.split('_')[0], [signal_type], [score_chromosome])[score_chromosome]
         self.signal = signal[0]  # only one experiment
 
     @staticmethod

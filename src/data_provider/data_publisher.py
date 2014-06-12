@@ -84,3 +84,24 @@ email {email}
 
     for g in genomes:
         os.makedirs(os.path.join(PUBLISH_DIR, g))
+
+if __name__ == "__main__":
+    import argparse
+    import numpy as np
+    parser = argparse.ArgumentParser()
+    parser.add_argument('file', help="npz file to publish")
+    parser.add_argument('--name', help="name of the published track")
+    parser.add_argument('--short_label', help="short label for the published track")
+    parser.add_argument('--long_label', help="long label (description) for the published track")
+    args = parser.parse_args()
+    data = SeqLoader.load_result_dict(args.file)
+    data2 = dict()
+    for k, v in data.items():
+        if k == 'chrM':
+            continue
+        v = np.array(v)
+        las = np.where(v > 0)[0]
+        data2[k] = v[:las[-1]]
+    publish_dic(data2, 20, args.name or os.path.basename(args.file),
+                short_label=args.short_label or os.path.basename(args.file),
+                long_label=args.long_label or os.path.basename(args.file))
