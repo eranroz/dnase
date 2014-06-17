@@ -16,7 +16,7 @@ import logging
 
 import numpy as np
 
-from config import DATA_DIR, PUBLISH_DIR, MEAN_MARKERS, PUBLISH_URL_PATH, BED_GRAPH_TO_BIG_WIG, CHROM_SIZES
+from config import DATA_DIR, PUBLISH_DIR, MEAN_MARKERS, BED_TO_BIG_BED, BED_GRAPH_TO_BIG_WIG, CHROM_SIZES
 import re
 
 __author__ = 'eran'
@@ -354,6 +354,7 @@ def load_experiments(cell_type, experiments=None, chromosomes=None, resolution=2
     {MEAN_MARKERS} directory can be populated by data_provider/createMeanMarkers script
 
 
+    @param resolution: resolution (number of bp) to load experiments. should be multiple of 20
     @param cell_type: cell type
     @param experiments: name of experiments
     @param chromosomes:
@@ -367,7 +368,7 @@ def load_experiments(cell_type, experiments=None, chromosomes=None, resolution=2
     res_dict = dict()
     experiment_mapping = available_experiments(cell_type, experiments)
     existing_experiments = experiment_mapping.keys()
-    n_expiremnts = len(list(experiment_mapping.keys()))
+    #n_expiremnts = len(list(experiment_mapping.keys()))
     for ex_i, mean_file in enumerate(experiment_mapping.values()):
         mean_data = load_result_dict(mean_file)
 
@@ -453,7 +454,6 @@ def load_dict(name, resolution=20, transform=None, directory=DATA_DIR, chromosom
     return res_dict
 
 
-
 def continuous_transform(seq):
     """
     Transform the sequence to ln(1+x)
@@ -520,3 +520,31 @@ def bg_to_bigwig(bed_graph, big_wig=None):
 
     subprocess.call([BED_GRAPH_TO_BIG_WIG, bed_graph, CHROM_SIZES, big_wig])
     print('Created bw')
+
+
+def build_bed(classified_seq, resolution, output_file_name):
+    """
+    Writes a bed file
+    @param classified_seq: dictionary like object where keys are chromosomes and values are their data
+    @param resolution: bin size in bp
+    @param output_file_name: name of file to write
+    @return:
+    """
+    from pyx import BedGraphReader
+    BedGraphReader.write_bed(classified_seq, resolution, output_file_name)
+
+
+def bed_to_bigbed(bed_graph, big_bed=None):
+    """
+    Transforms bed to big bed
+    @param bed_graph: file to transform
+    @param big_bed: full output file or default to PUBLISH_DIR
+    """
+    if big_bed is None:
+        big_bed = os.path.split(bed_graph)[-1].replace('.bed', '.bb')
+        big_bed = os.path.join(PUBLISH_DIR, big_bed)
+        print('Saving to ', big_bed)
+    import subprocess
+
+    subprocess.call([BED_TO_BIG_BED, bed_graph, CHROM_SIZES, big_bed])
+    print('Created bb')

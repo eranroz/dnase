@@ -36,11 +36,8 @@ def multichannel_hmm_discrete(resolution, model_name=None, out_file=None):
     model_name = os.path.join(BED_GRAPH_RESULTS_DIR,
                               '%s.Discrete%i.model' % (model_name or default_name, resolution))
 
-    min_alpha = 0
-
     strategy = DiscreteMultichannelHMM()
     classifier = DNaseMultiChannelClassifier(strategy, resolution, model_name)
-    #data = LazyChromosomeLoader(lambda x: np.log(strategy.data_transform()(chromosomes=[x], directory=MEAN_DNASE_DIR)[x]+1))
     multichannel_data = classifier.load_data(directory=MEAN_DNASE_DIR)
 
     if os.path.exists(model_name):
@@ -74,6 +71,7 @@ def multichannel_hmm_continuous(resolution=1000, model_name=None, out_file=None,
     Use multichannel HMM to classify DNase
 
     continuous approach (multivariate gaussian mixture model)
+    @param in_dir: directory of data to learn (fit) and classify
     @param out_file: output file name
     @param model_name: name of model
     @param resolution: resolution to learn
@@ -85,13 +83,13 @@ def multichannel_hmm_continuous(resolution=1000, model_name=None, out_file=None,
     num_states = 10
     strategy = GMMClassifier()
     model = DNaseMultiChannelClassifier(strategy, resolution, model_name)
-    #data = LazyChromosomeLoader(lambda x: np.log(strategy.data_transform()(chromosomes=[x], directory=MEAN_DNASE_DIR)[x]+1))
-    data = model.load_data(directory=MEAN_DNASE_DIR)
+    data = model.load_data(directory=in_dir)
+    #np.seterr(all='raise')  # for now don't allow
     strategy.default(data, train_chromosome=train_chromosome, num_states=num_states)
     strategy.training_chr = [train_chromosome]
 
     model.fit(data)  # pca projection matrix selection + forward-backward
-    classification = model.classify(data)  # viterbi
+    classification = model.classify_data(data)  # viterbi
 
     # save
     if not os.path.exists(os.path.join(MODELS_DIR, model_name)):
@@ -101,25 +99,7 @@ def multichannel_hmm_continuous(resolution=1000, model_name=None, out_file=None,
                 resolution,
                 '%sSegmentome' % model_name,
                 short_label="Mutlicell-PCA %i" % num_states,
-                long_label="%i states, multi-cell DNase HMM GMM" % num_states)
-
-
-def raw_find_variable_regions():
-    """
-    Simple function to locate regions that behave differently in cell types
-    based only on raw data
-    """
-    chrom = 'chr6'
-    resolution = 10000
-    chrom_data = load_multichannel(resolution, [chrom])[chrom]
-    chrom_data.data = np.log(chrom_data.data + 1)
-    chrom_data = np.array(chrom_data.todense())
-    variance = np.var(chrom_data, 0)
-    max_var = np.argsort(variance)[::-1]
-    for i in max_var[:10]:
-        print('%s: %i-%i' % (chrom, i * resolution - 10000, i * resolution + 10000))
-    print(max_var[:10] * resolution)
-    print('-----')
+                long_label="%i states, multi-cell DNase HMM GMM" % num_states, colors=True)
 
 
 if __name__ == '__main__':
