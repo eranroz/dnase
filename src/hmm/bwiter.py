@@ -20,7 +20,7 @@ _time_profiling = False
 
 class IteratorCondition():
     """
-    Iteration condition class for Bau-Welch with limited number of iterations
+    Iteration condition class for Baum-Welch with limited number of iterations
     which also outputs the likelihood for each iteration
     """
 
@@ -43,6 +43,41 @@ class IteratorCondition():
         #    return False
         self.prev_p = args[0]
         return self.i >= 0
+
+
+class DiffCondition():
+    """
+    Iteration condition class for Baum-Welch based on diff in likelihood
+    which also outputs the likelihood for each iteration
+    """
+
+    def __init__(self, threshold=1000):
+        """
+        @param count: number of iterations
+        """
+        self.count = 0
+        self.start = False
+        self.prev_p = 0
+        self.threshold = threshold
+        self.positive_iters = 0
+
+    def __call__(self, *args, **kwargs):
+        if self.start:
+            print('\t\t\t====(#: %s) Likelihood:' % self.count, args[0], '=====')
+            self.count += 1
+            if self.prev_p == 0:
+                self.prev_p = args[0]
+                return True
+            diff = (args[0]-self.prev_p)
+            self.prev_p = args[0]
+            if diff < self.threshold:
+                self.positive_iters += 1
+            else:
+                self.positive_iters = 0
+            return self.positive_iters < 3
+        else:
+            self.start = True
+            return True
 
 
 def bw_iter(symbol_seq, initial_model=None, stop_condition=IteratorCondition(3)):

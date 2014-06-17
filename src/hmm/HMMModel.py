@@ -221,8 +221,11 @@ class HMMModel(object):
         #-----	  forward algorithm	  -----
         #intial condition is begin state (in Durbin there is another forward - the begin = 1)
         tup = next(forward_iterator)  #emission_i, forward_i,scaling_i
-        tup[1][...] = state_trans_mat[0, 1:] * tup[0]
-        tup[2][...] = np.sum(tup[1])
+        try:
+            tup[1][...] = np.maximum(state_trans_mat[0, 1:] * tup[0], 1e-100)
+        except FloatingPointError:
+            tup[1][...] = np.exp(np.maximum(np.log(state_trans_mat[0, 1:])+np.log(tup[0]), -100))
+        tup[2][...] = fsum(tup[1])
         tup[1][...] /= tup[2]
         prev_forward = tup[1]
 
@@ -658,7 +661,7 @@ class GaussianHMM(HMMModel):
                 #    new_cov = np.maximum(new_cov, 0)
                 #new_cov = np.sqrt(new_cov)
                 # the diagonal must be large enough
-                np.fill_diagonal(new_cov, np.maximum(np.diag(new_cov), min_std))
+                np.fill_diagonal(new_cov, np.maximum(new_cov.diagonal().copy(), min_std))
                 #if is_mixture:
                 covars_mixture.append(new_cov)
             mean_vars.append(list(zip(new_means, covars_mixture)))
@@ -676,6 +679,21 @@ class GaussianHMM(HMMModel):
         """
         emission_seq = np.log(self.get_emission()[1:, symbol_seq]).T
         return _hmmc.viterbi(emission_seq, self.state_transition)
+
+    def __str__(self):
+        # handelding mixtures isn't handled currently
+        means = np.array([x[0][0] for x in self.emission.mean_vars])
+        vars = np.array([x[0][1].diagonal() for x in self.emission.mean_vars])
+
+        str_rep = 'GMM. Means:\n'
+        str_rep += np.array_str(means, precision=2, suppress_small=True, max_line_width=250).replace('\n\n', '\n')
+        str_rep += '\nDiagonals for covariance matrices:\n'
+        str_rep += np.array_str(vars, precision=2, suppress_small=True, max_line_width=250).replace('\n\n', '\n')
+        str_rep += '\nStates transitions% (begin not shown):\n'
+        str_rep += np.array_str(100*(self.state_transition[1:, 1:]), precision=1, suppress_small=True,
+                                max_line_width=250)
+        return str_rep
+
 
 class _GaussianEmission():
     """
