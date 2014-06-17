@@ -18,14 +18,14 @@ def add_track(track_name, url_name, short_label, long_label, genome="hg19"):
     @param genome: relevant genome for the track
     """
     tracks_db_path = os.path.join(PUBLISH_DIR, genome, "trackDb.txt")
-    track_config = """track {track_name}
+    track_config = """
+
+track {track_name}
 bigDataUrl {url_name}.bw
 shortLabel {short_label}
 longLabel {long_label}
 type bigWig
 autoScale on
-
-
 """.format(**({'track_name': track_name.replace('[', '_').replace(']', '_'),
                'url_name': url_name,
                'short_label': short_label,
