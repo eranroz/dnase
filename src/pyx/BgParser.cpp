@@ -32,3 +32,31 @@ public:
 private:
 	FILE *m_fd;
 };
+
+
+class BedWriter {
+
+public:
+	BedWriter():m_fd(NULL){}
+	bool init(const char* filename){
+		m_fd = fopen(filename, "w");
+		return m_fd != NULL;
+	}
+
+	/**
+	Reads next line
+	*/
+	void write(char* chrom, int start, int end, int score, char* rgb) {
+		// score used here as name
+		fprintf(m_fd, "\n%s\t%d\t%d\t%d\t0\t.\t%d\t%d\t%s",chrom, start, end, score, start, end, rgb);
+	}
+
+	void close(){
+		if (m_fd != NULL) {
+			fclose(m_fd);
+		}
+	}
+
+private:
+	FILE *m_fd;
+};
