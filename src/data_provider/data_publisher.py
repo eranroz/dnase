@@ -2,27 +2,30 @@
 Manages a hub for easier access in UCSC genome browser
 """
 import os
-from config import PUBLISH_URL_PATH, PUBLISH_DIR
+from config import PUBLISH_URL_PATH, PUBLISH_DIR, TRACK_DESCRIPTION_TEMPALTE
 from data_provider import SeqLoader
 
 __author__ = 'eranroz'
 
 
-def add_track(track_name, url_name, short_label, long_label, genome="hg19"):
+def add_track(track_name, url_name, short_label, long_label, description_html=None, genome="hg19"):
     """
     Adds description for the new track to the track config file
+    @param description_html: url of html with description for the track
     @param track_name: name of the track
     @param url_name: url name for the track
     @param short_label: short label for the track
-    @param long_label: longer description for the trach
+    @param long_label: longer description for the track
     @param genome: relevant genome for the track
     """
     tracks_db_path = os.path.join(PUBLISH_DIR, genome, "trackDb.txt")
     colors = url_name.endswith('.bb')
+    auto_format = ""
     if colors:
-        auto_format = "itemRgb On"
+        auto_format += "itemRgb On"
     else:
-        auto_format = "autoScale on"
+        auto_format += "autoScale on"
+
     track_config = """
 
 track {track_name}
@@ -43,10 +46,18 @@ type {type}
     with open(tracks_db_path, 'a') as tracks_file:
         tracks_file.write(track_config)
 
+    if description_html is not None:
+        # description path must be the save name as the track name
+        description_path = os.path.join(PUBLISH_DIR, genome, track_name.replace('[', '_').replace(']', '_')+'.html')
+        with open(description_path, 'w') as description_file:
+            description_file.write(description_html)
 
-def publish_dic(dic_to_publish, resolution, name, short_label="", long_label="", genome="hg19", colors=False):
+
+def publish_dic(dic_to_publish, resolution, name, short_label="", long_label="", genome="hg19", description_html=None,
+                colors=False):
     """
     Publish dictionary: transforms it to big wig place it in PUBLISH_DIR
+    @param description_html: html data to describe the track
     @param colors: False for bigWig otuput (gray scale), True for bigBed colored
     @param long_label: longer description to explain in track
     @param genome: relevant genome from UCSC such as hg19
@@ -70,7 +81,8 @@ def publish_dic(dic_to_publish, resolution, name, short_label="", long_label="",
             track_header = 'track type=bigWig name="%s" description="%s" bigDataUrl="%s/%s/%s.bw"'
     print(track_header % (name, short_label, PUBLISH_URL_PATH, genome, name))
     add_track(name.replace(' ', '_'), ('%s.bb' if colors else '%s.bw') % name, short_label or name, long_label,
-              genome=genome)
+              genome=genome, description_html=description_html)
+
     return track_header
 
 
@@ -100,6 +112,26 @@ email {email}
     for g in genomes:
         os.makedirs(os.path.join(PUBLISH_DIR, g))
 
+
+def create_description_html(description, methods, verification, credits_details, references):
+    """
+    @param description: Description for a track
+    @param methods: details of methods used in the track
+    @param verification: verification details for the track
+    @param credits_details: credit details for the track
+    @param references: references
+    @return: a partial html with the given details
+    """
+    with open(TRACK_DESCRIPTION_TEMPALTE, 'r') as template_file:
+        template = template_file.read()
+    template = template.format(**({'Description': description,
+               'Methods': methods,
+               'Verification': verification,
+               'Credits': credits_details,
+               'References': references
+    }))
+
+    return template
 
 if __name__ == "__main__":
     import argparse

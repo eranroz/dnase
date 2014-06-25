@@ -13,21 +13,23 @@ RES_DIR = os.path.abspath('../results/')  # directory for results
 BIN_DIR = os.path.abspath('../bin/')  # directory for executable of transformers
 PUBLISH_DIR = os.path.abspath('../results/hub/')  # directory accessible to web for publish results
 BED_GRAPH_RESULTS_DIR = os.path.join(RES_DIR, 'open-closed', 'data')  # directory for segmentation
-NCBI_DIR = '...'
-MEAN_DNASE_DIR = os.path.join(DATA_DIR, "cellTypes")
+NCBI_DIR = os.path.join(DATA_DIR, 'data')
+
 # dependencies - use dataDownloader.setup_environment or install.sh in bin directory
 WIG_TO_BIG_WIG = os.path.join(BIN_DIR, 'wigToBigWig')
 BIG_WIG_TO_BED_GRAPH = os.path.join(BIN_DIR, 'bigWigToBedGraph')
 BED_GRAPH_TO_BIG_WIG = os.path.join(BIN_DIR, 'bedGraphToBigWig')
+BED_TO_BIG_BED = os.path.join(BIN_DIR, 'bedToBigBed')
 CHROM_SIZES = os.path.join(BIN_DIR, 'hg19.chrom.sizes')
 
 
 # can be created by createMeanMarkers
-MEAN_MARKERS = os.path.join(OTHER_DATA, 'bedMarkersNpz')  # directory for storing mean between samples of specific cell type
-#MEAN_MARKERS_NEW = os.path.join(OTHER_DATA, 'bedMarkersNpz')  # directory for storing mean between samples with npz
-
+MEAN_MARKERS = os.path.join(DATA_DIR, 'markers')  # directory for storing mean between samples of specific cell type
+MEAN_DNASE_DIR = os.path.join(DATA_DIR, "represent", "mean_dnaseNpz")
 
 # models
 MODELS_DIR = os.path.join(RES_DIR, "models")
 
+# publish
 PUBLISH_URL_PATH = 'http://...'  # accessible url to expose results to genome browser
+TRACK_DESCRIPTION_TEMPALTE = os.path.abspath(os.path.join("data_provider", "trackDescriptionTemplate.html"))
