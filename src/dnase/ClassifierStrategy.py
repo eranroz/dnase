@@ -16,6 +16,7 @@ class ClassifierStrategy:
         """
         Trains/Fits the classifier before actual classification
         @param training_sequences: training sequences for the Baum-Welch (EM)
+        @return tuple (p-likelihood, fit_params)
         """
         pass
 

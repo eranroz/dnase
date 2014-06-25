@@ -59,7 +59,8 @@ class HMMClassifier(ClassifierStrategy):
         print(old_model)
         print("New model")
         print(self.model)
-        return p
+        fit_params = {}
+        return p, fit_params
 
     def classify(self, sequence_dict):
         """

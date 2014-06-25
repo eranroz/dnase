@@ -110,7 +110,7 @@ def score_hmt(training_dir, ctcf_scorer, genes_scorer):
     strategy.training_chr([TRAIN_CHROMOSOME])
     strategy.output_p = False  # output viterbi and not posterior in this case
 
-    p_score = strategy.fit([wavelet_data])  # fit the classifier to train_chromosome
+    p_score, fit_params = strategy.fit([wavelet_data])  # fit the classifier to train_chromosome
     viterbi_tree = strategy.classify({SCORE_CHROMOSOME: wavelet_data[SCORE_CHROMOSOME]})
     viterbi_tree = viterbi_tree[SCORE_CHROMOSOME]
     # select resolution
@@ -217,7 +217,7 @@ def evaluate_resolution(training_dir, res, score_functions=None):
             strategy.training_chr([TRAIN_CHROMOSOME])
             strategy.output_p = False  # output viterbi and not posterior in this case
 
-            p_score = strategy.fit([data], 5)  # fit the classifier to train_chromosome
+            p_score, fit_params = strategy.fit([data], 5)  # fit the classifier to train_chromosome
 
             print('Model: %s\tMin alpha: %s' % (model_type, str(min_alpha)))
             segmentations = list(create_segmentation(scores_data, strategy))
