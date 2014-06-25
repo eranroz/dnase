@@ -31,9 +31,11 @@ class IteratorCondition():
         self.i = count
         self.start = False
         self.prev_p = None
+        self.prev_likelihoods = []
 
     def __call__(self, *args, **kwargs):
         if self.start:
+            self.prev_likelihoods.append(args[0])
             print('\t\t\t====(#: %s) Likelihood:' % self.i, args[0], '=====')
         else:
             self.start = True
@@ -51,7 +53,7 @@ class DiffCondition():
     which also outputs the likelihood for each iteration
     """
 
-    def __init__(self, threshold=1000):
+    def __init__(self, threshold=100):
         """
         @param count: number of iterations
         """
@@ -60,9 +62,11 @@ class DiffCondition():
         self.prev_p = 0
         self.threshold = threshold
         self.positive_iters = 0
+        self.prev_likelihoods = []
 
     def __call__(self, *args, **kwargs):
         if self.start:
+            self.prev_likelihoods.append(args[0])
             print('\t\t\t====(#: %s) Likelihood:' % self.count, args[0], '=====')
             self.count += 1
             if self.prev_p == 0:
