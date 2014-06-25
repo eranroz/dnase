@@ -11,10 +11,12 @@ class PcaTransformer(object):
     """
     Reduce number of dimensions using PCA
     """
-    def __init__(self, w=None):
+    def __init__(self, w=None, mu=0):
         self.w = w
+        self.mu = mu  # used for recovery
 
     def fit(self, data, ndim=None, min_energy=0.9):
+        self.mu = np.mean(data, 1)
         data_centered = data - np.mean(data, 1)[:, None]
         co_var = np.cov(data_centered)
         eig_vals, eig_vecs = np.linalg.eig(co_var)
@@ -28,6 +30,14 @@ class PcaTransformer(object):
 
         self.w = eig_vecs[0:ndim, :]
         return self.w
+
+    def recover(self, reduced):
+        """
+        Inverse for pca, reconstruction of the original data
+        @param reduced: reduced data
+        @return: reconstruction of original data
+        """
+        return np.dot(reduced, self.w)+self.mu
 
     def __call__(self, *args, **kwargs):
         data_centered = args[0] - np.mean(args[0], 1)[:, None]
