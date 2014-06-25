@@ -73,8 +73,10 @@ class DNaseMetaClassifier(object):
         """
         Fits the model before actually running it
         @param training_sequences: training sequences for the Baum-Welch (EM)
+        @return tuple(likelihood, fit_params)
         """
-        self.strategy.fit(training_sequences)
+        p, fit_params = self.strategy.fit(training_sequences)
+        return p, fit_params
 
     def classify(self, sequence_dicts):
         """
@@ -168,8 +170,8 @@ class DNaseClassifier(DNaseMetaClassifier):
         path_to_save = self.model_dir()
         if save_raw:
             print('Writing raw file')
-            #SeqLoader.build_bedgraph(data, resolution=self.resolution,
-            #                         output_file=os.path.join(path_to_save, '%s.raw.bg' % out_file))
+            # SeqLoader.build_bedgraph(data, resolution=self.resolution,
+            # output_file=os.path.join(path_to_save, '%s.raw.bg' % out_file))
             publish_dic(data,
                         self.resolution,
                         '%s.%s.raw' % (self.name, out_file),
@@ -215,9 +217,22 @@ class DNaseMultiChannelClassifier(DNaseMetaClassifier):
         self.sparse = False
         super().__init__(strategy, resolution, name)
 
-    def load_multichannel_data(self, directory=MEAN_DNASE_DIR, chromosomes=None):
+    def _load_multichannel_data(self, directory=MEAN_DNASE_DIR, chromosomes=None):
         """
         Loads multichannel data. return a sparse representation
+        @param directory: directory of files to analyze (directory with npz files)
+        @param chromosomes: chromosomes to load
+        @type directory: str
+        @return: dict where keys are chromosomes and values are matrix: cell_types X genome position
+        """
+        return DNaseMultiChannelClassifier.load_multichannel_data(self.sparse, self.resolution, directory, chromosomes)
+
+    @staticmethod
+    def load_multichannel_data(sparse, resolution, directory=MEAN_DNASE_DIR, chromosomes=None):
+        """
+        Loads multichannel data. return a sparse representation
+        @param resolution: resolution for binning
+        @param sparse: whether to sue sparse representation
         @param directory: directory of files to analyze (directory with npz files)
         @param chromosomes: chromosomes to load
         @type directory: str
@@ -226,31 +241,31 @@ class DNaseMultiChannelClassifier(DNaseMetaClassifier):
         @remarks:
         """
 
-        if self.sparse:
+        if sparse:
             import scipy.sparse
+
             compress = lambda x: scipy.sparse.coo_matrix(x)
             vstack = scipy.sparse.vstack
         else:
             compress = lambda x: x
             vstack = np.vstack
         all_cells = []
-        # for debug: can be cut to 4 cells
-        cell_types_paths = [os.path.join(directory, cell_type) for cell_type in os.listdir(MEAN_DNASE_DIR)]
-
+        cell_types_paths = [os.path.join(directory, cell_type) for cell_type in os.listdir(directory)]
+        cell_types_paths.sort()  # deterministic...
         for cell_i, cell_type_path in enumerate(cell_types_paths):
-            logging.info('Loading %s (%i/%i)' % (cell_type_path, cell_i+1, len(cell_types_paths)))
+            logging.info('Loading %s (%i/%i)' % (cell_type_path, cell_i + 1, len(cell_types_paths)))
             cell_data = SeqLoader.load_result_dict(cell_type_path)
             cell_data_new = dict()  # chromosome to down-sampled sparse matrix
 
             for k in (cell_data.keys() if chromosomes is None else chromosomes):
-                cell_data_new[k] = compress(SeqLoader.down_sample(cell_data[k], self.resolution / 20))
+                cell_data_new[k] = compress(SeqLoader.down_sample(cell_data[k], resolution / 20))
             all_cells.append(cell_data_new)
 
         # organize be chromosomes
         if chromosomes is None:
             chromosomes = all_cells[0].keys()
         chromosomes_dic = dict()
-        len_dim = 1 if self.sparse else 0
+        len_dim = 1 if sparse else 0
         for chromosome in chromosomes:
 
             max_length = max([cell[chromosome].shape[len_dim] for cell in all_cells])
@@ -258,7 +273,7 @@ class DNaseMultiChannelClassifier(DNaseMetaClassifier):
             for cell in all_cells:
                 if max_length > cell[chromosome].shape[len_dim]:
                     tmp = np.zeros(max_length)
-                    if self.sparse:
+                    if sparse:
                         tmp[0:cell[chromosome].shape[len_dim]] = cell[chromosome].todense()
                     else:
                         tmp[0:cell[chromosome].shape[len_dim]] = cell[chromosome]
@@ -271,15 +286,17 @@ class DNaseMultiChannelClassifier(DNaseMetaClassifier):
             chromosomes_dic[chromosome] = chromosome_matrix
         return chromosomes_dic
 
-    def load_data(self, directory=MEAN_DNASE_DIR):
+    def load_data(self, directory=MEAN_DNASE_DIR, chromosomes=None):
         """
         Lazy loads data from directory
+        @param chromosomes: chromosomes to load
         @param directory: directory of files to analyze (directory with npz files)
         @return: dict where keys are chromosomes and values are matrix: cell_types X genome position
         """
         transform = self.strategy.data_transform()
-        loader = LazyChromosomeLoader(lambda x: transform(self.load_multichannel_data(chromosomes=[x],
-                                                                                      directory=directory)[x]))
+        loader = LazyChromosomeLoader(lambda x: transform(self._load_multichannel_data(chromosomes=[x],
+                                                                                       directory=directory)[x]),
+                                      chromosomes=chromosomes)
         return loader
 
     def classify_data(self, data):
@@ -289,3 +306,139 @@ class DNaseMultiChannelClassifier(DNaseMetaClassifier):
         @return: chromosome dictionary with classified data
         """
         return self.strategy.classify(data)
+
+    def html_description(self, training_dir):
+        """
+        Get textual description of the model
+        @param training_dir: directory used for training the model
+        """
+        training_files_raw = [cell_type.replace('.npz', '').replace('.mean', '') for cell_type in
+                              os.listdir(training_dir)]
+        training_files_raw.sort()  # determinism...
+        training_files = ['<li>%s</li>' % cell_type.replace('.npz', '') for cell_type
+                          in training_files_raw]
+        pca = self.strategy.pca_reduction
+        # currently assume GaussianHMM is the only valid strategy...
+
+        # mean_states = np.array([mean[0] for mean, var in mean_vars_states])
+        #mean_states = self.strategy.pca_reduction.recover(mean_states)
+        readme_content = """
+Multivariate gaussian model on the PCA transformation of many cells data.<br/>
+<b>Resolution:</b> {resolution}
+
+<h3>Training data</h3>
+Using data from directory: {training_dir}
+
+which includes:
+<ol>
+{training_files}
+</ol>
+
+<h3> Model parameters </h3>
+<ol>
+<li> PCA - Data dimension is reduced from {num_training} to {pca_dims} using PCA.</li>
+<li> HMM - Gaussian model (see below the learned parameters)</li>
+</ol>
+
+<h4>PCA</h4>
+<pre style="background:#EEE; white-space: nowrap;">
+{pca_str}
+</pre>
+<h4>Training output</h4>
+output parameters:
+<pre style="background:#EEE; white-space: nowrap;">
+{strategy_str}
+</pre>
+
+<h3>State transition</h3>
+{html_state_transition}
+
+<h3>States meaning</h3>
+Recovery of states using inverse PCA may give us the following explanation:
+{mean_states}
+""".format(**({
+                    'resolution': '%ibp' % self.resolution,
+                    'training_dir': training_dir,
+                    'training_files': '\n'.join(training_files),
+                    'num_training': str(len(training_files)),
+                    'pca_dims': str(pca.w.shape[0]),
+                    'strategy_str': str(self),
+                    'pca_str': np.array_str(pca.w, precision=2, suppress_small=True,
+                                            max_line_width=250).replace('\n\n', '\n'),
+                    'mean_states': self.strategy.states_html(),
+                    'html_state_transition': self.strategy.model.html_state_transition()
+                }))
+        return readme_content
+
+    def readme(self, training_dir, pca, likelihoods):
+        """
+        Creates an organized readme to describe the model and its training details
+        @param likelihoods: array of likelihoods during fit
+        @param pca: PCA matrix
+        @param training_dir: directory used for training the model
+        """
+        import matplotlib
+        matplotlib.use('Agg')
+        from matplotlib import pyplot as plt
+        # add readme
+        training_files_raw = [cell_type.replace('.npz', '').replace('.mean', '') for cell_type in
+                              os.listdir(training_dir)]
+        training_files_raw.sort()  # determinism...
+        training_files = ['\t %3i. %s' % (cell_i, cell_type.replace('.npz', '')) for cell_i, cell_type
+                          in enumerate(training_files_raw)]
+
+        # currently assume GaussianHMM is the only valid strategy...
+        mean_vars_states = [state[0] for state in self.strategy.model.emission.mean_vars]
+        mean_states = np.array([mean[0] for mean, var in mean_vars_states])
+        mean_states = self.strategy.pca_reduction.recover(mean_states)
+        readme_content = """
+=Multichannel model=
+===Training data===
+Using data from directory: {training_dir}
+
+which includes:
+{training_files}
+== Model parameters ==
+1. PCA - Data dimension is reduced from {num_training} to {pca_dims} using PCA.
+2. HMM - Gaussian model (see below the learned parameters)
+
+===PCA===
+{pca_str}
+
+===Training output===
+output parameters:
+{strategy_str}
+
+==States meaning==
+Recovery of states using inverse PCA
+{mean_states}
+""".format(**({
+                                           'training_dir': training_dir,
+                                           'training_files': '\n'.join(training_files),
+                                           'num_training': str(len(training_files)),
+                                           'pca_dims': str(pca.w.shape[0]),
+                                           'strategy_str': str(self),
+                                           'pca_str': np.array_str(pca.w, precision=2, suppress_small=True,
+                                                                   max_line_width=250).replace('\n\n', '\n'),
+                                           'mean_states': np.array_str(mean_states, precision=2, suppress_small=True,
+                                                                       max_line_width=250).replace('\n\n', '\n')
+                                       }))
+        with open(self.model_dir("readme.txt"), 'w') as readme:
+            readme.write(readme_content)
+
+        # some plots!
+        # plot likelihood vs iterations (did we converge? probably yes...)
+        plt.plot(likelihoods)
+        plt.title('Likelihood for model')
+        plt.ylabel('log likelihood')
+        plt.xlabel('iterations')
+        plt.savefig(self.model_dir('em-training.png'))
+
+        # plot states
+        plt.imshow(mean_states.T, cmap=plt.cm.Blues, extent=(0, mean_states.shape[0], 0, mean_states.shape[1]),
+                   interpolation='none')
+        plt.yticks(np.arange(len(training_files_raw)) + 0.5, training_files_raw, fontsize='x-small')  # , rotation=90
+        plt.xlabel('states')
+        plt.ylabel('cell type')
+        plt.tight_layout()
+        plt.savefig(self.model_dir("states.png"))

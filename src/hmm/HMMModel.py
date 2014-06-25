@@ -8,6 +8,7 @@ from collections import namedtuple
 from pyx import _hmmc
 from math import fsum
 
+
 class HMMModel(object):
     """
     base model for HMM
@@ -429,6 +430,36 @@ class HMMModel(object):
         l_posterior = forward + backward - log_p_model
         bf_result = namedtuple('BFResult', 'model_p state_p forward backward')
         return bf_result(log_p_model, l_posterior, forward, backward)
+
+    def html_state_transition(self):
+        """
+        nice html representation (as table) of state transition matrix
+        """
+        import matplotlib as mpl
+        import matplotlib.cm as cm
+        backgrounds = cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=np.min(self.state_transition), vmax=np.max(self.state_transition)), cmap=cm.Blues)
+        color_mapper = lambda x:  'rgb(%i, %i, %i)' % backgrounds.to_rgba(x, bytes=True)[:3]
+
+        cells_ths = ''.join(['<th>%i</th>' % i for i in np.arange(1, self.state_transition.shape[0])])
+        states_trs = []
+        for state_i, state_trans in enumerate(self.state_transition[1:, 1:]):
+            state_description = "<td style=\"font-weight:bold;\">%i</td>" % (state_i+1)
+            state_description += ''.join(['<td style="color:#fff;background:%s">%.2f</td>' % (color_mapper(val), val)
+                                          for val in state_trans])
+
+            states_trs.append('<tr>%s</tr>' % state_description)
+
+        template = """
+<table style="font-size:85%;text-align:center;border-collapse:collapse;border:1px solid #aaa;"  cellpadding="5" border="1">
+<tr style="font-size:larger; font-weight: bold;">
+    <th>State/Cell</th>
+    {cells_ths}
+</tr>
+{states_trs}
+</table>
+"""
+        return template.format(**({'cells_ths': cells_ths,
+                                   'states_trs': '\n'.join(states_trs)}))
 
 
 class DiscreteHMM(HMMModel):
