@@ -192,6 +192,8 @@ class DNaseClassifier(DNaseMetaClassifier):
     def load_data(self, infile, chromosomes=None):
         """
         loads the data of file
+        @param infile: file to load
+        @param chromosomes: chromosomes to load
         """
         transformer = self.strategy.data_transform()
         data = SeqLoader.load_dict(infile, resolution=self.resolution, transform=transformer,
