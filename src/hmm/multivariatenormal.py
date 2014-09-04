@@ -32,10 +32,10 @@ class MultivariateNormal(object):
             self.my_norm_p = (((2*np.pi)**d)*np.linalg.det(cov))**-0.5
         except FloatingPointError:
             # create semi positive definite matrix for the covariance... (numrical issue...)
-            s = np.maximum(s, np.finfo(float).eps)
+            s = np.maximum(s, np.finfo(float).tiny*2)
             cov = np.dot(np.dot(u, np.diag(s)), np.linalg.inv(u))
             self.inv_cov = np.linalg.inv(cov)
-            almost_det = np.linalg.det(cov)
+            almost_det = np.prod(s[s > 1e-5])
             self.my_norm_p = (((2*np.pi)**d)*almost_det)**-0.5
 
 
@@ -59,13 +59,14 @@ class MultivariateNormal(object):
         p = np.sum(x_cov * x, 1)
         try:
             p = np.exp(-0.5*p)
+            return (p*self.my_norm_p).T
         except FloatingPointError:
             log_norm = np.log(self.my_norm_p)
             minimum_val = np.ceil(np.log(np.finfo(float).tiny))
+            p = np.maximum(p, 1e-300)
             p = np.maximum(-0.5*p+log_norm, minimum_val)
+            p = np.minimum(p, 0)
             return np.exp(p).T
-            #p[p <= np.finfo(float).tiny] = 0
-        return (p*self.my_norm_p).T
 
 
 class MixtureModel(object):
