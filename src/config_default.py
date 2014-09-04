@@ -31,5 +31,5 @@ MEAN_DNASE_DIR = os.path.join(DATA_DIR, "represent", "mean_dnaseNpz")
 MODELS_DIR = os.path.join(RES_DIR, "models")
 
 # publish
-PUBLISH_URL_PATH = 'http://...'  # accessible url to expose results to genome browser
+PUBLISH_URL_PATH_HUB = 'http://...'  # accessible url to expose results to genome browser
 TRACK_DESCRIPTION_TEMPALTE = os.path.abspath(os.path.join("data_provider", "trackDescriptionTemplate.html"))

@@ -2,7 +2,7 @@
 Manages a hub for easier access in UCSC genome browser
 """
 import os
-from config import PUBLISH_URL_PATH, PUBLISH_DIR, TRACK_DESCRIPTION_TEMPALTE
+from config import PUBLISH_URL_PATH_HUB, PUBLISH_DIR, TRACK_DESCRIPTION_TEMPALTE
 from data_provider import SeqLoader
 
 __author__ = 'eranroz'
@@ -79,7 +79,7 @@ def publish_dic(dic_to_publish, resolution, name, short_label="", long_label="",
             SeqLoader.build_bedgraph(dic_to_publish, resolution=resolution, output_file=tmp_file)
             SeqLoader.bg_to_bigwig(tmp_file.name, os.path.join(PUBLISH_DIR, genome, '%s.bw' % name))
             track_header = 'track type=bigWig name="%s" description="%s" bigDataUrl="%s/%s/%s.bw"'
-    print(track_header % (name, short_label, PUBLISH_URL_PATH, genome, name))
+    print(track_header % (name, short_label, PUBLISH_URL_PATH_HUB, genome, name))
     add_track(name.replace(' ', '_'), ('%s.bb' if colors else '%s.bw') % name, short_label or name, long_label,
               genome=genome, description_html=description_html)
 
