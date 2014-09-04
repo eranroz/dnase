@@ -31,7 +31,7 @@ def setup_environment():
         import urllib.request
 
         urlret = urllib.request.urlretrieve
-    except:
+    except ImportError:
         import urllib.urlretrieve
 
         urlret = urllib.urlretrieve
@@ -155,13 +155,14 @@ def download_ncbi_markers(markers_to_download=None, markers_to_ignore=None,
         time.sleep(5)
 
 
-def transform_ncbi():
+def transform_ncbi(wig_directory=NCBI_DIR):
     """
-    Transforms .wig.gz files in NCBI_DIR to pkl files
+    Transforms .wig.gz files in wig_directory to pkl files
+    @param wig_directory: directory with cell types subdirectories, with wig files
     """
     pool_process = Pool()
-    for cell in os.listdir(NCBI_DIR):
-        cell_path = os.path.join(NCBI_DIR, cell)
+    for cell in os.listdir(wig_directory):
+        cell_path = os.path.join(wig_directory, cell)
         cell_files = os.listdir(cell_path)
         for f in cell_files:
             if not f.endswith('.wig.gz') or 'filtered-density' in f:
@@ -185,26 +186,28 @@ def process_ncbi_file(wig_file):
     print('end processing %s' % wig_file)
 
 
-def transform_files():
+def transform_files(directory=DATA_DIR):
     """
-    Transforms wig.gz files to pickle files and archives to RAW_DATA_DIR
+    Transforms wig.gz files to npz files and archives to RAW_DATA_DIR
 
+    @param directory: directory with wig.gz files to transform
     """
     pool_process = Pool()
-    for f in [f for f in os.listdir(DATA_DIR) if f.endswith('.wig.gz')]:
-        pool_process.apply_async(process_file, (f,))
+    for f in [f for f in os.listdir(directory) if f.endswith('.wig.gz')]:
+        pool_process.apply_async(process_file, (f, directory))
     pool_process.close()
     pool_process.join()
 
 
-def process_file(wig_file):
+def process_file(wig_file, directory=DATA_DIR):
     """
     pickle it
+    @param directory: directory in which the wig file placed
     @param wig_file: wig file to pickle
     """
-    SeqLoader.wig_transform(os.path.join(DATA_DIR, wig_file), SMOOTHING)
-    print(os.path.join(DATA_DIR, wig_file), '-->', os.path.join(RAW_DATA_DIR, wig_file))
-    os.rename(os.path.join(DATA_DIR, wig_file), os.path.join(RAW_DATA_DIR, wig_file))
+    SeqLoader.wig_transform(os.path.join(directory, wig_file), SMOOTHING)
+    print(os.path.join(directory, wig_file), '-->', os.path.join(RAW_DATA_DIR, wig_file))
+    os.rename(os.path.join(directory, wig_file), os.path.join(RAW_DATA_DIR, wig_file))
 
 
 def wig_to_bed_graph(cur_trans):
@@ -222,15 +225,16 @@ def wig_to_bed_graph(cur_trans):
     print('Completed')
 
 
-def raw_data_to_bed_graph():
+def raw_data_to_bed_graph(wig_directory=RAW_DATA_DIR, bg_directory=BED_GRAPH_DIR):
     """
     Transforms raw data wig files to bed graph files
+    @param wig_directory: directory with wig files
+    @param bg_directory: directory with bed graph data
     """
-    global BED_GRAPH_DIR
     pool_process = Pool()
-    bed_graphs = [f[:-3] for f in os.listdir(BED_GRAPH_DIR)]
-    need_transform = [(os.path.join(RAW_DATA_DIR, f), os.path.join(BED_GRAPH_DIR, f[:-7] + '.bw'),
-                       os.path.join(BED_GRAPH_DIR, f[:-7] + '.bg')) for f in os.listdir(RAW_DATA_DIR) if
+    bed_graphs = [f[:-3] for f in os.listdir(bg_directory)]
+    need_transform = [(os.path.join(wig_directory, f), os.path.join(bg_directory, f[:-7] + '.bw'),
+                       os.path.join(bg_directory, f[:-7] + '.bg')) for f in os.listdir(wig_directory) if
                       f[:-7] not in bed_graphs]
     for trans in need_transform:
         pool_process.apply_async(wig_to_bed_graph, (trans,))
@@ -238,17 +242,84 @@ def raw_data_to_bed_graph():
     pool_process.join()
 
 
-if __name__ == "__main__":
+def ucsc_download(src_path, target_path=None, email=None):
+    """
+    Downloads data from UCSC using FTP
+    @param src_path: path to download to (local)
+    @param target_path: path to download from (remote)
+    @param email: email for authentication
+    """
+    if target_path is None:
+        target_path = input("In which directory would you like to store the genome?")
+    if email is None:
+        email = input("Please enter your mail (will be used to enter to hgdownload ftp")
+    with ftplib.FTP(host='hgdownload.cse.ucsc.edu') as ucsc_ftp:
+        ucsc_ftp.login(user="anonymous", passwd=email)
+        ucsc_ftp.cwd(os.path.dirname(target_path))
+        if not os.path.exists(src_path):
+            os.makedirs(src_path)
 
+        with open(os.path.join(src_path, os.path.basename(target_path)), 'wb') as dFile:
+            ucsc_ftp.retrbinary('RETR %s' % os.path.basename(target_path), dFile.write)
+
+
+if __name__ == "__main__":
     operations = {
         'setupEnvironment': setup_environment,
         'download': download_data,  # obsolete - instead use rsync and download from NCBI
-        'transform': transform_files,  # transforms .wig.gz files in DATA_DIR to pickle
-        'rawDataToBedGraph': raw_data_to_bed_graph,  # Transforms raw data wig files to bed graph files
-        'ncbiMarkers': download_ncbi_markers,  # downloads ncbi markers to OTHER_DATA/markers
-        'transform_ncbi': transform_ncbi  # transforms all files in NCBI_DIR to pkl files
+        #'transform': transform_files,  # transforms .wig.gz files in DATA_DIR to pickle
+        # 'rawDataToBedGraph': raw_data_to_bed_graph,  # Transforms raw data wig files to bed graph files
+        # 'ncbiMarkers': download_ncbi_markers,  # downloads ncbi markers to OTHER_DATA/markers
     }
     parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(help="")
+    parser_download_genome = subparsers.add_parser('download_genome', help='Downloads genome sequence')
+    parser_download_genome.add_argument('directory', help="Directory to store retrived file")
+    parser_download_genome.add_argument('--genome', help="Genome to download", default='hg19')
+    parser_download_genome.add_argument('--email', help="Email for authentication to UCSC", default='')
+    parser_download_genome.set_defaults(
+        func=lambda args: ucsc_download(args.directory, "goldenPath/%s/bigZips/%s.2bit" % (args.genome, args.genome),
+                                        args.email))
+
+    parser_transform_ncbi = subparsers.add_parser('transform_ncbi',
+                                                  help='Transforms .wig.gz files in NCBI_DIR to pkl files')
+    parser_transform_ncbi.add_argument('--directory', help="directory with cell types subdirectories, with wig files",
+                                       default=NCBI_DIR)
+    parser_transform_ncbi.set_defaults(func=lambda args: transform_ncbi(args.directory))
+
+    parser_download_ncbi_markers = subparsers.add_parser('ncbiMarkers',
+                                                         help='ownloads ncbi markers to OTHER_DATA/markers')
+    parser_download_ncbi_markers.add_argument('--markers_to_download',
+                                              help="specific experiments to be downloaded. " +
+                                                   "Default: histone modifications+mRNA-Seq and RRBS",
+                                              default=None)
+    parser_download_ncbi_markers.add_argument('--markers_to_ignore', help="markers to ignore",
+                                              default=None)
+    parser_download_ncbi_markers.add_argument('--by_experiments_dir', help="NCBI directory for downloading experiments",
+                                              default="pub/geo/DATA/roadmapepigenomics/by_experiment/")
+    parser_download_ncbi_markers.set_defaults(
+        func=lambda args: download_ncbi_markers(args.markers_to_download, args.markers_to_ignore,
+                                                args.by_experiments_dir))
+
+    raw_data_to_bed_graph_parser = subparsers.add_parser('transform_ncbi',
+                                                         help='Transforms .wig.gz files in NCBI_DIR to pkl files')
+    raw_data_to_bed_graph_parser.add_argument('--wig_directory', help="directory with wig files",
+                                              default=RAW_DATA_DIR)
+    raw_data_to_bed_graph_parser.add_argument('--bg_directory', help="directory with bed graph data",
+                                              default=BED_GRAPH_DIR)
+    raw_data_to_bed_graph_parser.set_defaults(func=lambda args: raw_data_to_bed_graph(args.wig_directory,
+                                                                                      args.bg_directory))
+
+    wig_to_npz_transform = subparsers.add_parser('transform_ncbi',
+                                                 help='Transforms .wig.gz files in directory to npz files')
+    wig_to_npz_transform.add_argument('--directory', help="directory with wig.gz files to transform",
+                                      default=DATA_DIR)
+    wig_to_npz_transform.set_defaults(func=lambda args: transform_files(args.directory))
+
+    command_args = parser.parse_args()
+    command_args.func(command_args)
+
+    """
     parser.add_argument('command', help="Support commands: %s" % (', '.join(list(operations.keys()))))
     parser.add_argument('--experimentsDir', help="Directory in NCBI",
                         default='pub/geo/DATA/roadmapepigenomics/by_experiment/')
@@ -266,3 +337,4 @@ if __name__ == "__main__":
         download_ncbi_markers(args.experiments, args.ignoreExperiments, args.experimentsDir)
     else:
         operations[args.command]()
+    """
