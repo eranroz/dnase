@@ -531,6 +531,7 @@ def build_bed(classified_seq, resolution, output_file_name):
     @return:
     """
     from pyx import BedGraphReader
+    resolution = int(resolution)
     BedGraphReader.write_bed(classified_seq, resolution, output_file_name)
 
 
