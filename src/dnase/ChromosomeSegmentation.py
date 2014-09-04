@@ -54,8 +54,8 @@ class ChromosomeSegmentation:
     """
 
     def __init__(self, cell_type, segmentation, chromosome, model):
-        #(cell_type, seg, chromosome, model)
-        #cell_type, segmentation, resolution, chromosome
+        # (cell_type, seg, chromosome, model)
+        # cell_type, segmentation, resolution, chromosome
         # meta data:
         """
         @type model: DNaseClassifier
@@ -91,8 +91,10 @@ class ChromosomeSegmentation:
         """
 
         vv = np.convolve(segmentation, [1, -1])
-        #vv = np.append(-1, vv)  # start always with closed
-        boundaries = np.append(0, np.where(vv))  # add boundary at beginning
+        # vv = np.append(-1, vv)  # start always with closed
+        boundaries = np.where(vv)[0]
+        if boundaries[0] != 0:  # add boundary at beginning
+            boundaries = np.append(0, boundaries)
         lengths = np.diff(np.append(boundaries, len(vv) + 1))  # add the last
         open_closed = [0, 1] * np.floor(len(boundaries) / 2) + ([0] if len(boundaries) % 2 == 1 else [])
         return np.array([boundaries, lengths, open_closed]).T
@@ -170,7 +172,6 @@ class ChromosomeSegmentation:
                 labels.append(SegmentationFeatures.name(f))
         return labels
 
-
     def _load_average_accessibility(self):
         # load original dnase results and select only the required chromosome
         accessibility_data = SeqLoader.load_result_dict(os.path.join(MEAN_DNASE_DIR, "%s.mean.npz" % self.cell_type))
@@ -178,15 +179,26 @@ class ChromosomeSegmentation:
         # down-sample to the resolution. original resolution for mean dnase is 20
         accessibility_data = SeqLoader.down_sample(accessibility_data, (self.resolution / 20))
         region_matrix = self.get([SegmentationFeatures.Position, SegmentationFeatures.RegionLengths])
-        region_matrix[:, 1] += region_matrix[:, 0]
-        # keep same size as the matrix of segmentations
-        avg_accessibility = np.zeros(region_matrix[-1, 1] + 1)
-        avg_accessibility[0:np.minimum(region_matrix[-1, 1], accessibility_data.shape[0])] = accessibility_data[
-                                                                                             0:np.minimum(
-                                                                                                 region_matrix[-1, 1],
-                                                                                                 accessibility_data.shape[
-                                                                                                     0])]
-        region_accessibility = np.array([np.average(avg_accessibility[start:end]) for start, end in region_matrix])
+
+        region_accessibility = np.zeros(region_matrix.shape[0])
+        end_position = region_matrix[-1, 0] + region_matrix[-1, 1]
+        if accessibility_data.shape[0] < end_position:
+            accessibility_data = np.pad(accessibility_data, [0, end_position - accessibility_data.shape[0]], 'constant')
+        lengths = region_matrix[:, 1]
+        length_set = list(set(lengths))
+        length_set.sort()
+        prev_length = 0
+
+        for curr_length in length_set:
+            selector = lengths >= curr_length
+            sel_start = region_matrix[selector, 0]
+            while prev_length < curr_length:
+                region_accessibility[selector] += accessibility_data[sel_start + prev_length]
+                prev_length += 1
+
+        # normalize by length
+        region_accessibility /= region_matrix[:, 1]
+
         return region_accessibility
 
     def _load_markers(self, markers=None):
@@ -225,7 +237,7 @@ class ChromosomeSegmentation:
             [np.any(np.abs(golden_segment[:, 0] - reg[0]) < reg[1] * distance_threshold) for reg in position_length])
 
     def _load_motifs(self):
-        #TODO: implement
+        # TODO: implement
         raise NotImplementedError
 
 
@@ -246,7 +258,6 @@ def load(cell_type, model, chromosomes=None, segmentation=None):
         segmentation = SeqLoader.load_result_dict(segmentation_file)
     chromosomes = chromosomes or segmentation.keys()
     seg_dict = dict()
-    #items = list(segmentation.items())
     for chromosome in chromosomes:
         seg = segmentation[chromosome]
         seg_dict[chromosome] = ChromosomeSegmentation(cell_type, seg, chromosome, model)
