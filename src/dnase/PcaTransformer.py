@@ -16,6 +16,13 @@ class PcaTransformer(object):
         self.mu = mu  # used for recovery
 
     def fit(self, data, ndim=None, min_energy=0.9):
+        """
+        Transforms the data using linear transformation (w)
+        @param data: data to transform
+        @param ndim: number of dimensions (based on principle analysis)
+        @param min_energy:
+        @return:
+        """
         self.mu = np.mean(data, 1)
         data_centered = data - np.mean(data, 1)[:, None]
         co_var = np.cov(data_centered)
@@ -40,6 +47,16 @@ class PcaTransformer(object):
         return np.dot(reduced, self.w)+self.mu
 
     def __call__(self, *args, **kwargs):
-        data_centered = args[0] - np.mean(args[0], 1)[:, None]
+        data_centered = args[0] - self.mu[:, None]  # np.mean(args[0], 1)[:, None]
         pca_matrix = np.dot(self.w, data_centered)
         return pca_matrix
+
+    @staticmethod
+    def empty(ndims):
+        """
+        Creates an identity linear transformation.
+        @param ndims: number of dimensions
+        @return: identity matrix transformation
+        """
+        transform = PcaTransformer(w=np.eye(ndims), mu=np.zeros(ndims))
+        return transform
