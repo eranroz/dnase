@@ -9,11 +9,9 @@ __author__ = 'eranroz'
 
 from copy import deepcopy
 import time
-
 import numpy as np
 
 from hmm import HMMModel
-
 
 _time_profiling = False
 
@@ -55,7 +53,7 @@ class DiffCondition():
 
     def __init__(self, threshold=100):
         """
-        @param count: number of iterations
+        @param threshold: diff likelihood threshold (e.g if likelihood[i]-likelihood[i-1]<threshold we get out)
         """
         self.count = 0
         self.start = False
@@ -100,14 +98,18 @@ def bw_iter(symbol_seq, initial_model=None, stop_condition=IteratorCondition(3))
         stop_condition = IteratorCondition(stop_condition)
 
     prob = float('-inf')
-    while stop_condition(prob):
-        if _time_profiling:
-            bef = time.time()
-        bw_output = new_model.forward_backward(symbol_seq)
-        if _time_profiling:
-            print(time.time()-bef)
-        prob = bw_output.model_p
-        new_model.maximize(symbol_seq, bw_output)
+    print('Press ctrl+C for early termination of Baum-Welch training')
+    try:
+        while stop_condition(prob):
+            if _time_profiling:
+                bef = time.time()
+            bw_output = new_model.forward_backward(symbol_seq)
+            if _time_profiling:
+                print(time.time()-bef)
+            prob = bw_output.model_p
+            new_model.maximize(symbol_seq, bw_output)
+    except KeyboardInterrupt:
+        print('Early termination of EM training')
 
     return new_model, prob
 
