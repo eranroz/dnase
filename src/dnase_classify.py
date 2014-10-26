@@ -2,8 +2,13 @@
 This script uses DNase data to classify open and closed regions in chromosomes.
 E.g - it creates segmentation of the genome
 """
+__author__ = 'eran'
+
 import os
 import datetime
+import numpy as np
+import pickle
+import argparse
 
 from config import BED_GRAPH_RESULTS_DIR
 import data_provider.DiscreteTransformer
@@ -11,14 +16,7 @@ from dnase import dnase_classifier
 from dnase.HMMClassifier import HMMClassifier
 from dnase.dnase_classifier import DNaseClassifier
 from hmm.HMMModel import DiscreteHMM, ContinuousHMM
-
-
-__author__ = 'eran'
-
 from data_provider import SeqLoader
-import numpy as np
-import pickle
-import argparse
 
 resolution = 20
 min_alpha = None
@@ -31,6 +29,7 @@ def classify_continuous(in_file='UW.Fetal_Brain.ChromatinAccessibility.H-22510.D
     @param in_file: name of sample (according to filename in data directory, without resolution and extension)
     @param output_p: false for viterbi, true for posterior
     @param model_name: name of model to be used or none to train a new model
+    @param out_file: name of output file (a suffix .resolution.bg and .resolution.npz will be added)
     """
     state_transition = np.array(
         [
@@ -95,6 +94,7 @@ def classify_discrete(in_file='UW.Fetal_Brain.ChromatinAccessibility.H-22510.DS1
     @param in_file: name of sample (according to filename in data directory, without resolution and extension)
     @param output_p: false for viterbi, true for posterior
     @param model_name: name of model to be used or none to train a new model
+    @param out_file: name of output file (a suffix .resolution.bg and .resolution.npz will be added)
     """
     state_transition = np.array(
         [
@@ -170,11 +170,12 @@ def run_simple_classification():
     classify_discrete(output_p=True)
 
 
-if __name__ == "__main__":
+def main():
     """
     Example:
     python3 -m dnase_classify --posterior --resolution 1000 UW.Fetal_Brain.ChromatinAccessibility.H-22510.DS11872
     """
+    global resolution, min_alpha
     parser = argparse.ArgumentParser()
     parser.add_argument('infile', help="input file, included in the data directory. with no file and resolution" +
                                        " extensions (suffixes)")
@@ -195,8 +196,6 @@ if __name__ == "__main__":
     parser.add_argument('--no-output_seg_bg', dest='output_seg_bg', action='store_false')
     parser.set_defaults(output_seg_bg=True)
     args = parser.parse_args()
-    print('Args')
-    print(args)
 
     resolution = args.resolution
 
@@ -228,3 +227,6 @@ if __name__ == "__main__":
     #classify_continuous(in_file=args.infile, output_p=args.posterior, model_name=args.model, out_file=args.output)
     #classify_discrete(in_file=args.infile, output_p=args.posterior, model_name=args.model, out_file=args.output)
     print('Finished')
+
+if __name__ == "__main__":
+    main()
