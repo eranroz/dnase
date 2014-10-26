@@ -7,13 +7,14 @@ and store related files in same directory
 import logging
 import os
 import numpy as np
-from config import MODELS_DIR, DATA_DIR, MEAN_DNASE_DIR
+import pickle
+from config import MODELS_DIR, DATA_DIR, MEAN_DNASE_DIR, PUBLISH_URL_PATH_MODELS
 from data_provider import SeqLoader
 from data_provider.LazyLoader import LazyChromosomeLoader
 from data_provider.data_publisher import publish_dic
+from html_utils import table_to_html_heatmap, list_to_ol
 
 __author__ = 'eranroz'
-import pickle
 
 _model_file_name = "model.pkl"
 
@@ -148,6 +149,12 @@ class DNaseClassifier(DNaseMetaClassifier):
         self.fit([data])
 
     def classify_file(self, file_name, chromosome=None):
+        """
+        Loads data from file, transforms it and returns classification
+        @param file_name: name of file
+        @param chromosome: chromosome to classify or None for all chromosomes
+        @return: a classification
+        """
         transformer = self.strategy.data_transform()
 
         data = SeqLoader.load_dict(file_name, resolution=self.resolution, transform=transformer,
@@ -317,24 +324,31 @@ class DNaseMultiChannelClassifier(DNaseMetaClassifier):
         training_files_raw = [cell_type.replace('.npz', '').replace('.mean', '') for cell_type in
                               os.listdir(training_dir)]
         training_files_raw.sort()  # determinism...
-        training_files = ['<li>%s</li>' % cell_type.replace('.npz', '') for cell_type
-                          in training_files_raw]
+        training_files = list_to_ol(training_files_raw)
+
         pca = self.strategy.pca_reduction
         # currently assume GaussianHMM is the only valid strategy...
 
-        # mean_states = np.array([mean[0] for mean, var in mean_vars_states])
-        #mean_states = self.strategy.pca_reduction.recover(mean_states)
+        pca_table = table_to_html_heatmap(pca.w.T, row_labels=training_files_raw)
+
+        states_covars = [state[0][1] for state in self.strategy.model.emission.mean_vars]
+
+        covariance_states = [table_to_html_heatmap(state, caption='State %i' % (state_i + 1))
+                             for state_i, state in enumerate(states_covars)]
+        covariance_states = '\n'.join(
+            ['<div style="float:left;">%s</div>' % cov_table for cov_table in covariance_states])
         readme_content = """
 Multivariate gaussian model on the PCA transformation of many cells data.<br/>
 <b>Resolution:</b> {resolution}
 
-<h3>Training data</h3>
-Using data from directory: {training_dir}
+<div style="float:right">
+<h3>State transition</h3>
+{html_state_transition}
+</div>
 
-which includes:
-<ol>
-{training_files}
-</ol>
+<h3>States meaning</h3>
+Recovery of states using inverse PCA may give us the following explanation:
+{mean_states}
 
 <h3> Model parameters </h3>
 <ol>
@@ -343,33 +357,50 @@ which includes:
 </ol>
 
 <h4>PCA</h4>
-<pre style="background:#EEE; white-space: nowrap;">
-{pca_str}
-</pre>
+PCA base:<br>
+{pca_table}
+
 <h4>Training output</h4>
 output parameters:
-<pre style="background:#EEE; white-space: nowrap;">
+<pre style="background:#EEE;">
 {strategy_str}
 </pre>
 
-<h3>State transition</h3>
-{html_state_transition}
+<h4>EM converge</h4>
+The following graph shows the convergence of the model is terms of log likelihood for the model describing the training
+data compared to number of iterations:
+<div style="text-align:center;">
+<img src="{url_models_dir}/{model_name}/em-training.png"/>
+</div>
 
-<h3>States meaning</h3>
-Recovery of states using inverse PCA may give us the following explanation:
-{mean_states}
+Covariance matrices for different states:
+<br style="clear:both;">
+{covariance_states}
+
+<br style="clear:both;">
+Accessibility across cell types for different states:
+<img src="{url_models_dir}/{model_name}/states_regions.png"/>
+
+<h3>Training data</h3>
+Using data from directory: {training_dir}
+
+which includes:
+{training_files}
+
 """.format(**({
-                    'resolution': '%ibp' % self.resolution,
-                    'training_dir': training_dir,
-                    'training_files': '\n'.join(training_files),
-                    'num_training': str(len(training_files)),
-                    'pca_dims': str(pca.w.shape[0]),
-                    'strategy_str': str(self),
-                    'pca_str': np.array_str(pca.w, precision=2, suppress_small=True,
-                                            max_line_width=250).replace('\n\n', '\n'),
-                    'mean_states': self.strategy.states_html(),
-                    'html_state_transition': self.strategy.model.html_state_transition()
-                }))
+            'model_name': self.name,
+            'url_models_dir': PUBLISH_URL_PATH_MODELS,
+            'resolution': '%ibp' % self.resolution,
+            'training_dir': training_dir,
+            'training_files': training_files,
+            'num_training': str(len(training_files_raw)),
+            'pca_dims': str(pca.w.shape[0]),
+            'strategy_str': str(self),
+            'pca_table': pca_table,
+            'mean_states': self.strategy.states_html(input_labels=training_files_raw),
+            'html_state_transition': self.strategy.model.html_state_transition(),
+            'covariance_states': covariance_states
+               }))
         return readme_content
 
     def readme(self, training_dir, pca, likelihoods):
@@ -380,6 +411,7 @@ Recovery of states using inverse PCA may give us the following explanation:
         @param training_dir: directory used for training the model
         """
         import matplotlib
+
         matplotlib.use('Agg')
         from matplotlib import pyplot as plt
         # add readme
@@ -415,16 +447,16 @@ output parameters:
 Recovery of states using inverse PCA
 {mean_states}
 """.format(**({
-                                           'training_dir': training_dir,
-                                           'training_files': '\n'.join(training_files),
-                                           'num_training': str(len(training_files)),
-                                           'pca_dims': str(pca.w.shape[0]),
-                                           'strategy_str': str(self),
-                                           'pca_str': np.array_str(pca.w, precision=2, suppress_small=True,
-                                                                   max_line_width=250).replace('\n\n', '\n'),
-                                           'mean_states': np.array_str(mean_states, precision=2, suppress_small=True,
-                                                                       max_line_width=250).replace('\n\n', '\n')
-                                       }))
+                   'training_dir': training_dir,
+                   'training_files': '\n'.join(training_files),
+                   'num_training': str(len(training_files)),
+                   'pca_dims': str(pca.w.shape[0]),
+                   'strategy_str': str(self),
+                   'pca_str': np.array_str(pca.w, precision=2, suppress_small=True,
+                                           max_line_width=250).replace('\n\n', '\n'),
+                   'mean_states': np.array_str(mean_states, precision=2, suppress_small=True,
+                                               max_line_width=250).replace('\n\n', '\n')
+              }))
         with open(self.model_dir("readme.txt"), 'w') as readme:
             readme.write(readme_content)
 
