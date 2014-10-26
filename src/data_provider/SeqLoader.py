@@ -103,86 +103,6 @@ def wig_transform(wig_file, smoothing=100, output=True):
     return written_dict
 
 
-def bed_graph_transform(bedgraph_file, smoothing=100, save=True):
-    """
-    Gets a bedgraph file and transforms it to dictionary (chr1 -> [scores], ch2 -> [scores]...)
-    and saves it with pickle
-    @param save:
-    @param smoothing:  bin size for smoothing (common raw data can be 20bp)
-    @param bedgraph_file: input file
-    @return:
-    """
-    # TODO: may be duplicant to load_bg below
-
-    written_dict = dict()  # dictionary keys: chromosomes [ score, score], and chromosome-position: start position
-    chrm_score = []  # in size of smoothing
-    max_resolution = 20  # the minimum size of resolution given
-    with open(bedgraph_file, 'r') as bgfile:
-        prev_data = []  # in max resolution size
-        prev_chrom, prev_start, prev_end, score = bgfile.readline().rstrip().split('\t')
-        prev_start = int(prev_start)
-        prev_end = int(prev_end)
-        score = float(score)
-        # add zeros to beginning until start
-        for pos in range(1, prev_end, smoothing):
-            if pos < prev_start:
-                chrm_score.append(0)
-            elif pos < prev_start + smoothing:  # begin - less than smoothing size
-                chrm_score.append(score * (pos - prev_start))
-            elif prev_end - pos < smoothing:  # end - less than smoothing size
-                prev_data = [max_resolution * score] * int((prev_end + 1 - pos) / max_resolution)
-            else:
-                chrm_score.append(score * smoothing)
-
-        written_dict[prev_chrom + '-position'] = prev_start
-        rlines = 0
-        #longest = 1000
-        smoothing /= max_resolution
-        if int(smoothing) != smoothing:
-            raise Exception("bad smoothing parameter. (should be divided by 20)")
-        else:
-            smoothing = int(smoothing)
-        for r in bgfile:
-            chrom, start, end, score = r.rstrip().split('\t')
-            if chrom != prev_chrom:
-                if len(prev_data) != 0:
-                    chrm_score.append(sum(prev_data))
-                written_dict[prev_chrom] = chrm_score
-                chrm_score = []
-                written_dict[chrom + '-position'] = int(start)
-                print(r)
-                prev_data = []
-                prev_end = 0
-            start = int(start)
-            end = int(end)
-            score = float(score)
-            if start != prev_end:
-                prev_data += [0] * int((start - prev_end) / max_resolution)
-
-            if rlines % 100000 == 0:
-                print(rlines)
-
-            prev_data += [max_resolution * score] * (int((end - start) / max_resolution))
-            prev_end = end
-            prev_chrom = chrom
-            for smooth_bin in zip(*[iter(prev_data)] * smoothing):
-                chrm_score.append(sum(smooth_bin))
-            remaining = (len(prev_data) % smoothing)
-            prev_data = prev_data[-remaining:] if remaining > 0 else []
-            rlines += 1
-        if len(prev_data) != 0:
-            chrm_score.append(sum(prev_data))
-        written_dict[prev_chrom] = chrm_score
-
-    print('Finished reading and down-sampling')
-    if save:  # save to file or return as is
-        output_filename = bedgraph_file.replace('.bedGraph', '.' + str(smoothing) + '.npz')
-        save_result_dict(output_filename, written_dict)
-        print('Finished writing file')
-    else:
-        return written_dict
-
-
 def chrom_sizes():
     """
     Get chromosome sizes of hg19 as dictionary
@@ -330,7 +250,7 @@ def available_experiments(cell_type, experiments=None):
         for ex in experiments_to_load:
             ex_dir = os.path.join(MEAN_MARKERS, ex)
             if not os.path.exists(ex_dir):
-                raise Exception("Data for experiment %s isn\'t available" % ex)
+                raise Exception("Data for experiment %s isn\'t available - you should download & transform it" % ex)
             ex_cell_type_dir = os.path.join(ex_dir, cell_type)
             # fallback to find similar cell type
             if not os.path.exists(ex_cell_type_dir):
@@ -338,7 +258,7 @@ def available_experiments(cell_type, experiments=None):
                 ex_cell_type_dir = os.path.join(ex_dir, re.sub('fetal_(.+)', '\\1_fetal', cell_type))
                 if not os.path.exists(ex_cell_type_dir):
                     if warn:
-                        logging.warning('Cell type %s not found for expirment %s' % (cell_type, ex))
+                        logging.warning('Cell type %s not found for experiment %s' % (cell_type, ex))
                     continue
             mean_file = os.path.join(ex_cell_type_dir, 'mean.npz')
             available_ex[ex] = mean_file
@@ -394,7 +314,9 @@ def load_experiments(cell_type, experiments=None, chromosomes=None, resolution=2
                     #combined[:ex_i, 0:existing_val.shape[1]] = existing_val[:ex_i, :]
                 else:
                     combined = existing_val
-
+                if chromosome_value.shape[0] < existing_val.shape[1]:
+                    chromosome_value = np.append(chromosome_value,
+                                                 np.zeros(existing_val.shape[1]-chromosome_value.shape[0]))
                 combined = vstack([combined, csr_matrix(chromosome_value)])
                 #combined[ex_i, 0:chromosome_value.shape[0]] = chromosome_value
 
@@ -548,4 +470,3 @@ def bed_to_bigbed(bed_graph, big_bed=None):
     import subprocess
 
     subprocess.call([BED_TO_BIG_BED, bed_graph, CHROM_SIZES, big_bed])
-    print('Created bb')
