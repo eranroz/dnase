@@ -18,12 +18,102 @@ see also:
     multichannel_classify - script for multichannel classifications
 """
 import numpy as np
-from dnase.ClassifierStrategy import ClassifierStrategy
-from dnase.PcaTransformer import PcaTransformer
+from models.ClassifierStrategy import ClassifierStrategy
+from models.PcaTransformer import PcaTransformer
 from hmm.HMMModel import GaussianHMM, DiscreteHMM
 from hmm.bwiter import bw_iter, IteratorCondition, DiffCondition
 
 __author__ = 'eranroz'
+
+
+def continuous_state_selection(data, num_states):
+    """
+    Heuristic creation of emission for states/selecting number of stats.
+    Instead of random selection of the emission matrix we find clusters of co-occurring values,
+    and use those clusters as means for states and the close values as estimation for covariance matrix
+    Nubmer of clusters/states is subject to pruning if not pre-selected
+
+    @param num_states: number of states in model
+    @param data: dense data for specific chromosome
+    @return: initial emission for gaussian mixture model HMM (array of (mean, covariance)
+    """
+
+    def soft_k_means_step(clustered_data, clusters_means):
+        """
+        Soft k means
+        @param clustered_data: data to cluster
+        @param clusters_means: number of clusters
+        @return: new clusters means
+        """
+        w = np.array([np.sum(np.power(clustered_data - c, 2), axis=1) for c in clusters_means])
+        w /= ((np.max(w) + np.mean(w)) / 1000)  # scale w
+        w = np.minimum(w, 500)  # 500 is enough (to eliminate underflow)
+        w = np.exp(-w)
+        w = w / np.sum(w, 0)  # normalize for each point
+        w = w / np.sum(w, 1)[:, None]  # normalize for all cluster
+        return np.dot(w, clustered_data)
+
+    data = data.T
+    num_sub_samples = 2
+    sub_indics = np.random.permutation(np.arange(data.shape[0] - data.shape[0] % num_sub_samples))
+    n_clusters = num_states or data.shape[1] * 2  # number of clustering will be subject to pruning
+
+    clusters = np.random.random((n_clusters, data.shape[1])) * np.max(data, 0)
+
+    # once we have assumption for clusters work with real sub batches of the data
+    sub_indics = sub_indics.reshape(num_sub_samples, -1)
+
+    different_clusters = False
+    step = 0
+    while not different_clusters:
+        diff = np.ones(1)
+        iter_count = 0
+        while np.any(diff > 1e-1) and iter_count < 10:
+            sub_data = data[sub_indics[step % num_sub_samples], :]
+            new_clusters = soft_k_means_step(sub_data, clusters)
+            diff = np.sum((new_clusters - clusters) ** 2, axis=1)
+            clusters = new_clusters
+            iter_count += 1
+        step += 1
+
+        if num_states:
+            different_clusters = True
+        else:
+            dist_matrix = np.array([np.sum(np.power(clusters - c, 2), axis=1) for c in clusters])
+            np.fill_diagonal(dist_matrix, 1000)
+            closest_cluster = np.min(dist_matrix)
+            threshold = 2 * np.mean(dist_matrix) / np.var(dist_matrix)  # or to just assign 0.1?
+            if closest_cluster < threshold:
+                # pruning the closest point and add random to close points
+                subject_to_next_prune = list(set(np.where(dist_matrix < threshold)[0]))
+                clusters[subject_to_next_prune, :] += 0.5 * clusters[subject_to_next_prune, :] * np.random.random(
+                    (len(subject_to_next_prune), data.shape[1]))
+                clusters = clusters[np.arange(n_clusters) != np.where(dist_matrix == closest_cluster)[0][0], :]
+                n_clusters -= 1
+            else:
+                different_clusters = True
+
+    # now assign points to clusters
+    # and add some random
+    clusters += clusters * np.random.random(clusters.shape) * 0.1
+    clusters = clusters[np.argsort(np.sum(clusters ** 2, 1))]  # to give some meaning
+
+    weight = np.array([np.sum(np.power(data - c, 2), axis=1) for c in clusters])
+    weight /= (np.mean(weight) / 500)  # scale w
+    weight = np.minimum(weight, 500)
+    weight = np.exp(-weight)
+    weight /= np.sum(weight, 0)  # normalize for each point
+    weight /= np.sum(weight, 1)[:, None]  # normalize for all cluster
+    means = np.dot(weight, data)
+    covs = []
+    min_std = 10 * np.finfo(float).tiny
+    for mu, p in zip(means, weight):
+        seq_min_mean = data - mu
+        new_cov = np.dot((seq_min_mean.T * p), seq_min_mean)
+        new_cov = np.maximum(new_cov, min_std)
+        covs.append(new_cov)
+    means_covs = list(zip(means, covs))
+    return means_covs
 
 
 class GMMClassifier(ClassifierStrategy):
@@ -34,7 +124,7 @@ class GMMClassifier(ClassifierStrategy):
     * It adds some functions for smart selection of the initial state
     """
 
-    def __init__(self, model=None, pca_reduction=None, train_chromosome='chr1'):
+    def __init__(self, model=None, pca_reduction=None, train_chromosome='chr1', study_diff=True):
         """
         @type model: GaussianHMM
         @param model: GaussianHMM to model the multichannel data
@@ -42,8 +132,13 @@ class GMMClassifier(ClassifierStrategy):
         self.model = model
         self.pca_reduction = pca_reduction
         self.train_chromosome = train_chromosome
+        self.study_diff = study_diff  # whether we should reduce the mean from each location before PCA
 
     def pca_ndims(self):
+        """
+        number of dimensions
+        @return: number of dimensions
+        """
         return self.pca_reduction.w.shape
 
     def training_chr(self, chromosome):
@@ -69,13 +164,14 @@ class GMMClassifier(ClassifierStrategy):
         training_seqs = data[self.train_chromosome]
 
         if self.pca_reduction is None:
+            print('Fitting PCA')
             self.pca_reduction = PcaTransformer()
             self.pca_reduction.fit(training_seqs[0], min_energy=energy, ndim=pca_components)
-        else:
-            transformer = self.pca_reduction
+
+        transformer = self.pca_reduction
         training_seqs = transformer(training_seqs)
 
-        #TODO: use different sequences?
+        # TODO: use different sequences?
         bw_stop_condition = IteratorCondition(iterations) if iterations is not None else DiffCondition()
         self.model, p = bw_iter(training_seqs, self.model, bw_stop_condition)
 
@@ -111,15 +207,23 @@ class GMMClassifier(ClassifierStrategy):
         get associated data transformation pre-processing
         @return: log(x+1)
         """
-        return lambda x: np.log(np.array(x) + 1)
 
-    def default(self, data, train_chromosome='chr8', num_states=10, pca_energy=None):
+        def log_diff(data):
+            log_data = np.log(np.array(data) + 1)
+            return log_data - np.mean(log_data, 0)
+
+        if self.study_diff:
+            return log_diff
+        else:
+            return lambda x: np.log(np.array(x) + 1)
+
+    def init_pca_clustering(self, data, train_chromosome='chr8', num_states=10, pca_energy=None):
         """
-        Default initialization for GMM classifier with:
-        * "training" for PCA (based on train chromosome covar
+        Default initialization for GMM classifier with PCA and then clustering (before actual training)
+        * "training" for PCA (based on train chromosome covar)
         * heuristic selection of number of state and their emission (soft k means)
         * state transition - random initialization with some prior assumptions
-        @param pca_energy: minimum energy for PCA (to select number of dimensions)
+        @param pca_energy: minimum energy for PCA (to select number of dimensions).
         @type train_chromosome: str
         @type num_states: int
         @param data: data (or partial data) to use for selection of pca transformation, and k-means for states
@@ -131,10 +235,21 @@ class GMMClassifier(ClassifierStrategy):
         transformer = PcaTransformer()
         transformer.fit(chrom_data, min_energy=pca_energy)
         chrom_data = transformer(chrom_data)
+        self.init_by_clustering({train_chromosome: chrom_data}, train_chromosome, num_states)
+        self.pca_reduction = transformer  # override if PCA reduction with the trained PCA
 
-        emission = GMMClassifier._continuous_state_selection(chrom_data, num_states=num_states)
+    def init_by_clustering(self, data, train_chromosome='chr8', num_states=10):
+        """
+        Default initialization for GMM classifier with clustering (before actual training)
+         @param data: data (or partial data) to use for selection of pca transformation, and k-means for states
+                    (initial guess). dictionary like object
+        @param train_chromosome: chromosome to use for training (must be in data. eg data[train_chromosome]
+        @param num_states: number of states in HMM
+        """
+        chrom_data = data[train_chromosome]
+        emission = continuous_state_selection(chrom_data, num_states=num_states)
         n_states = len(emission) + 1  # number of states plus begin state
-        print('Number of states selected %i' % (n_states-1))
+        print('Number of states selected %i' % (n_states - 1))
         state_transition = np.random.random((n_states, n_states))
         # fill diagonal with higher values
         np.fill_diagonal(state_transition, np.sum(state_transition, 1))
@@ -144,7 +259,7 @@ class GMMClassifier(ClassifierStrategy):
         # initial guess
         initial_model = GaussianHMM(state_transition, emission)
         self.model = initial_model
-        self.pca_reduction = transformer
+        self.pca_reduction = PcaTransformer.empty()
         self.train_chromosome = train_chromosome
 
     @staticmethod
@@ -160,148 +275,93 @@ class GMMClassifier(ClassifierStrategy):
         @return: a GMM classifier
         """
         classifier = GMMClassifier()
-        classifier.default(data, train_chromosome, num_states)
+        classifier.init_pca_clustering(data, train_chromosome, num_states)
         return classifier
-
-    @staticmethod
-    def _continuous_state_selection(data, num_states):
-        """
-        Heuristic creation of emission for states in continuous multidimensional model.
-        Instead of random selection of the emission matrix we find clusters of co-occurring values,
-        and use those clusters as means for states and the close values as estimation for covariance matrix
-
-        @param visualize: whether to visualize the state selection
-        @param num_states: number of states in model
-        @param data: dense data for specific chromosome
-        @return: initial emission for gaussian mixture model HMM (array of (mean, covariance)
-        """
-        def soft_k_means_step(data, clusters):
-            """
-            Soft k means
-            @param data: data to cluster
-            @param clusters: number of clusters
-            @return: new clusters means
-            """
-            w = np.array([np.sum(np.power(data - c, 2), axis=1) for c in clusters])
-            w /= ((np.max(w)+np.mean(w)) / 1000)  # scale w
-            w = np.minimum(w, 500)  # 500 is enough (to eliminate underflow)
-            w = np.exp(-w)
-            w = w / np.sum(w, 0)  # normalize for each point
-            w = w / np.sum(w, 1)[:, None]  # normalize for all cluster
-            return np.dot(w, data)
-        data = data.T
-        num_sub_samples = 2
-        sub_indics = np.random.permutation(np.arange(data.shape[0] - data.shape[0] % num_sub_samples))
-        n_clusters = num_states or data.shape[1] * 2  # number of clustering will be subject to pruning
-
-        clusters = np.random.random((n_clusters, data.shape[1])) * np.max(data, 0)
-
-        # once we have assumption for clusters work with real sub batches of the data
-        sub_indics = sub_indics.reshape(num_sub_samples, -1)
-
-        different_clusters = False
-        step = 0
-        while not different_clusters:
-            diff = np.ones(1)
-            iter_count = 0
-            while np.any(diff > 1e-1) and iter_count < 10:
-                sub_data = data[sub_indics[step % num_sub_samples], :]
-                new_clusters = soft_k_means_step(sub_data, clusters)
-                diff = np.sum((new_clusters - clusters) ** 2, axis=1)
-                clusters = new_clusters
-                iter_count += 1
-            step += 1
-
-            if num_states:
-                different_clusters = True
-            else:
-                dist_matrix = np.array([np.sum(np.power(clusters - c, 2), axis=1) for c in clusters])
-                np.fill_diagonal(dist_matrix, 1000)
-                closest_cluster = np.min(dist_matrix)
-                threshold = 2*np.mean(dist_matrix)/np.var(dist_matrix)  # or to just assign 0.1?
-                if closest_cluster < threshold:
-                    # pruning the closest point and add random to close points
-                    subject_to_next_prune = list(set(np.where(dist_matrix < threshold)[0]))
-                    clusters[subject_to_next_prune, :] += 0.5 * clusters[subject_to_next_prune, :] * np.random.random(
-                        (len(subject_to_next_prune), data.shape[1]))
-                    clusters = clusters[np.arange(n_clusters) != np.where(dist_matrix == closest_cluster)[0][0], :]
-                    n_clusters -= 1
-                else:
-                    different_clusters = True
-
-        # now assign points to clusters
-        # and add some random
-        clusters += clusters*np.random.random(clusters.shape)*0.1
-        clusters = clusters[np.argsort(np.sum(clusters ** 2, 1))]  # to give some meaning
-        W = np.array([np.sum(np.power(data - c, 2), axis=1) for c in clusters])
-        W /= (np.mean(W) / 500)  # scale w
-        W = np.minimum(W, 500)
-        W = np.exp(-W)
-        W /= np.sum(W, 0)  # normalize for each point
-        W /= np.sum(W, 1)[:, None]  # normalize for all cluster
-        means = np.dot(W, data)
-        covs = []
-        min_std = 10*np.finfo(float).tiny
-        for mu, p in zip(means, W):
-            seq_min_mean = data - mu
-            new_cov = np.dot((seq_min_mean.T * p), seq_min_mean)
-            new_cov = np.maximum(new_cov, min_std)
-            covs.append(new_cov)
-        means_covs = list(zip(means, covs))
-        return means_covs
 
     def __str__(self):
         return str(self.model)
 
-    def states_html(self):
+    def states_html(self, input_labels=None, column_title='Data/State'):
         """
         Creates a nice html table with some description/meaning for the states
 
+        @param column_title: title for the columns
+        @param input_labels: labels for the input (original dimensions before PCA)
         @return: table with html representation of the states
         """
         import matplotlib as mpl
         import matplotlib.cm as cm
+
         mean_vars_states = [state[0] for state in self.model.emission.mean_vars]
         mean_states = np.array([mean[0] for mean, var in mean_vars_states])
         mean_states = self.pca_reduction.recover(mean_states)
         n_states = mean_states.shape[0]
-        n_cells = mean_states.shape[1]
-        norm = mpl.colors.Normalize(vmin=0, vmax=n_states+1)
+        norm = mpl.colors.Normalize(vmin=0, vmax=n_states + 1)
         cmap = cm.spectral
         m = cm.ScalarMappable(norm=norm, cmap=cmap)
         color_schema = dict()
-        for i in range(0, n_states+1):
+        for i in range(0, n_states + 1):
             rgb = list(m.to_rgba(i)[:3])
-            for j in range(0,3):
-                rgb[j] = str("%i" % (255*rgb[j]))
+            for j in range(0, 3):
+                rgb[j] = str("%i" % (255 * rgb[j]))
             color_schema[i] = ','.join(rgb)
 
-        cells_ths = ''.join(['<th>%i</th>' % i for i in np.arange(1, n_cells+1)])
+        states_ths = ''.join(
+            ['<th style=\"color:rgb(%s)\">%i</th>' % (color_schema[i], i) for i in np.arange(1, n_states + 1)])
         states_trs = []
+        """
         max_v = np.max(mean_states)
         backgrounds = cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=np.min(mean_states), vmax=np.max(mean_states)), cmap=cm.Blues)
         mean_to_color = lambda x:  'rgb(%i, %i, %i)' % backgrounds.to_rgba(x, bytes=True)[:3]
-        for state_i, state_means in enumerate(mean_states):
-            state_description = "<td style=\"color:rgb(%s)\">%i</td>" % (color_schema[state_i], state_i+1)
+
+        for cell_i, cell_means in enumerate(mean_states.T):
+            cell_description = "<td>%s</td>" % (str(cell_i+1) if input_labels is None else input_labels[cell_i])
             # add mean values
-            state_description += ''.join(['<td style="font-size: %i%%;color:#fff;background:%s">%.2f</td>' % (mean/max_v * 100, mean_to_color(mean), mean) for mean in state_means])
+            cell_description += ''.join(['<td style="font-size: %i%%;color:#fff;background:%s">%.2f</td>' % (mean/max_v * 100, mean_to_color(mean), mean) for mean in cell_means])
             # wrap in tr
-            state_description = '<tr>%s</tr>' % state_description
-            states_trs.append(state_description)
-
-
+            cell_description = '<tr>%s</tr>' % cell_description
+            states_trs.append(cell_description)
+"""
         template = """
 <table style="font-size:85%;text-align:center;border-collapse:collapse;border:1px solid #aaa;" cellpadding="5" border="1">
 <tr style="font-size:larger; font-weight: bold;">
-    <th>State/Cell</th>
-    {cells_ths}
+    <th>{column_title}</th>
+    {states_ths}
 </tr>
 {states_trs}
 </table>
 """
-        return template.format(**({'cells_ths': cells_ths,
-                                   'states_trs': '\n'.join(states_trs)
-    }))
+        # rewrite
+        backgrounds = [
+            cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=np.min(data_type),
+                                                        vmax=np.max(data_type)), cmap=cm.Blues)
+            for data_type in mean_states.T]
+        mean_to_color = lambda x, y: 'rgb(%i, %i, %i)' % backgrounds[y].to_rgba(x, bytes=True)[:3]
+
+        for cell_i, data_type_means in enumerate(mean_states.T):
+            cell_description = "<td>%s</td>" % (str(cell_i + 1) if input_labels is None else input_labels[cell_i])
+            # add mean values
+            cell_description += ''.join(['<td style="font-size: 85%%;color:#fff;background:%s">%.2f</td>' %
+                                         (mean_to_color(mean, cell_i), mean)
+                                         for mean in data_type_means])
+            # wrap in tr
+            cell_description = '<tr>%s</tr>' % cell_description
+            states_trs.append(cell_description)
+
+        template = """
+<table style="font-size:85%;text-align:center;border-collapse:collapse;border:1px solid #aaa;" cellpadding="5" border="1">
+<tr style="font-size:larger; font-weight: bold;">
+    <th>{column_title}</th>
+    {states_ths}
+</tr>
+{states_trs}
+</table>
+"""
+
+        return template.format(**({'states_ths': states_ths,
+                                   'states_trs': '\n'.join(states_trs),
+                                   'column_title': column_title
+                                  }))
 
 
 class DiscreteMultichannelHMM(ClassifierStrategy):
@@ -321,6 +381,7 @@ class DiscreteMultichannelHMM(ClassifierStrategy):
         # TODO: only partially implemented here not tested...
         raise NotImplementedError
         from scipy.stats import norm as gaussian
+
         min_alpha = 0
         n_words = np.max(data)
         # init hmm model
@@ -352,7 +413,6 @@ class DiscreteMultichannelHMM(ClassifierStrategy):
 
         self.model = DiscreteHMM(state_transition, emission, min_alpha=min_alpha)
         print('Training model')
-
 
     def data_transform(self):
         """
@@ -458,7 +518,7 @@ class PCAClassifier(ClassifierStrategy):
             transformer = self.pca_reduction
         training_seqs = transformer(training_seqs)
 
-        #TODO: use different sequences?
+        # TODO: use different sequences?
         bw_stop_condition = IteratorCondition(iterations) if iterations is not None else DiffCondition()
         self.model, p = bw_iter(training_seqs, self.model, bw_stop_condition)
 
@@ -515,9 +575,9 @@ class PCAClassifier(ClassifierStrategy):
         transformer.fit(chrom_data, min_energy=pca_energy)
         chrom_data = transformer(chrom_data)
 
-        emission = GMMClassifier._continuous_state_selection(chrom_data, num_states=num_states)
+        emission = continuous_state_selection(chrom_data, num_states=num_states)
         n_states = len(emission) + 1  # number of states plus begin state
-        print('Number of states selected %i' % (n_states-1))
+        print('Number of states selected %i' % (n_states - 1))
         state_transition = np.random.random((n_states, n_states))
         # fill diagonal with higher values
         np.fill_diagonal(state_transition, np.sum(state_transition, 1))
@@ -543,95 +603,8 @@ class PCAClassifier(ClassifierStrategy):
         @return: a GMM classifier
         """
         classifier = GMMClassifier()
-        classifier.default(data, train_chromosome, num_states)
+        classifier.init_pca_clustering(data, train_chromosome, num_states)
         return classifier
-
-    @staticmethod
-    def _continuous_state_selection(data, num_states):
-        """
-        Heuristic creation of emission for states in continuous multidimensional model.
-        Instead of random selection of the emission matrix we find clusters of co-occurring values,
-        and use those clusters as means for states and the close values as estimation for covariance matrix
-
-        @param visualize: whether to visualize the state selection
-        @param num_states: number of states in model
-        @param data: dense data for specific chromosome
-        @return: initial emission for gaussian mixture model HMM (array of (mean, covariance)
-        """
-        def soft_k_means_step(data, clusters):
-            """
-            Soft k means
-            @param data: data to cluster
-            @param clusters: number of clusters
-            @return: new clusters means
-            """
-            w = np.array([np.sum(np.power(data - c, 2), axis=1) for c in clusters])
-            w /= ((np.max(w)+np.mean(w)) / 1000)  # scale w
-            w = np.minimum(w, 500)  # 500 is enough (to eliminate underflow)
-            w = np.exp(-w)
-            w = w / np.sum(w, 0)  # normalize for each point
-            w = w / np.sum(w, 1)[:, None]  # normalize for all cluster
-            return np.dot(w, data)
-        data = data.T
-        num_sub_samples = 2
-        sub_indics = np.random.permutation(np.arange(data.shape[0] - data.shape[0] % num_sub_samples))
-        n_clusters = num_states or data.shape[1] * 2  # number of clustering will be subject to pruning
-
-        clusters = np.random.random((n_clusters, data.shape[1])) * np.max(data, 0)
-
-        # once we have assumption for clusters work with real sub batches of the data
-        sub_indics = sub_indics.reshape(num_sub_samples, -1)
-
-        different_clusters = False
-        step = 0
-        while not different_clusters:
-            diff = np.ones(1)
-            iter_count = 0
-            while np.any(diff > 1e-1) and iter_count < 10:
-                sub_data = data[sub_indics[step % num_sub_samples], :]
-                new_clusters = soft_k_means_step(sub_data, clusters)
-                diff = np.sum((new_clusters - clusters) ** 2, axis=1)
-                clusters = new_clusters
-                iter_count += 1
-            step += 1
-
-            if num_states:
-                different_clusters = True
-            else:
-                dist_matrix = np.array([np.sum(np.power(clusters - c, 2), axis=1) for c in clusters])
-                np.fill_diagonal(dist_matrix, 1000)
-                closest_cluster = np.min(dist_matrix)
-                threshold = 2*np.mean(dist_matrix)/np.var(dist_matrix)  # or to just assign 0.1?
-                if closest_cluster < threshold:
-                    # pruning the closest point and add random to close points
-                    subject_to_next_prune = list(set(np.where(dist_matrix < threshold)[0]))
-                    clusters[subject_to_next_prune, :] += 0.5 * clusters[subject_to_next_prune, :] * np.random.random(
-                        (len(subject_to_next_prune), data.shape[1]))
-                    clusters = clusters[np.arange(n_clusters) != np.where(dist_matrix == closest_cluster)[0][0], :]
-                    n_clusters -= 1
-                else:
-                    different_clusters = True
-
-        # now assign points to clusters
-        # and add some random
-        clusters += clusters*np.random.random(clusters.shape)*0.1
-        clusters = clusters[np.argsort(np.sum(clusters ** 2, 1))]  # to give some meaning
-        W = np.array([np.sum(np.power(data - c, 2), axis=1) for c in clusters])
-        W /= (np.mean(W) / 500)  # scale w
-        W = np.minimum(W, 500)
-        W = np.exp(-W)
-        W /= np.sum(W, 0)  # normalize for each point
-        W /= np.sum(W, 1)[:, None]  # normalize for all cluster
-        means = np.dot(W, data)
-        covs = []
-        min_std = 10*np.finfo(float).tiny
-        for mu, p in zip(means, W):
-            seq_min_mean = data - mu
-            new_cov = np.dot((seq_min_mean.T * p), seq_min_mean)
-            new_cov = np.maximum(new_cov, min_std)
-            covs.append(new_cov)
-        means_covs = list(zip(means, covs))
-        return means_covs
 
     def __str__(self):
         return str(self.model)
@@ -644,34 +617,36 @@ class PCAClassifier(ClassifierStrategy):
         """
         import matplotlib as mpl
         import matplotlib.cm as cm
+
         mean_vars_states = [state[0] for state in self.model.emission.mean_vars]
         mean_states = np.array([mean[0] for mean, var in mean_vars_states])
         mean_states = self.pca_reduction.recover(mean_states)
         n_states = mean_states.shape[0]
         n_cells = mean_states.shape[1]
-        norm = mpl.colors.Normalize(vmin=0, vmax=n_states+1)
+        norm = mpl.colors.Normalize(vmin=0, vmax=n_states + 1)
         cmap = cm.spectral
         m = cm.ScalarMappable(norm=norm, cmap=cmap)
         color_schema = dict()
-        for i in range(0, n_states+1):
+        for i in range(0, n_states + 1):
             rgb = list(m.to_rgba(i)[:3])
-            for j in range(0,3):
-                rgb[j] = str("%i" % (255*rgb[j]))
+            for j in range(0, 3):
+                rgb[j] = str("%i" % (255 * rgb[j]))
             color_schema[i] = ','.join(rgb)
 
-        cells_ths = ''.join(['<th>%i</th>' % i for i in np.arange(1, n_cells+1)])
+        cells_ths = ''.join(['<th>%i</th>' % i for i in np.arange(1, n_cells + 1)])
         states_trs = []
         max_v = np.max(mean_states)
-        backgrounds = cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=np.min(mean_states), vmax=np.max(mean_states)), cmap=cm.Blues)
-        mean_to_color = lambda x:  'rgb(%i, %i, %i)' % backgrounds.to_rgba(x, bytes=True)[:3]
+        backgrounds = cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=np.min(mean_states), vmax=np.max(mean_states)),
+                                        cmap=cm.Blues)
+        mean_to_color = lambda x: 'rgb(%i, %i, %i)' % backgrounds.to_rgba(x, bytes=True)[:3]
         for state_i, state_means in enumerate(mean_states):
-            state_description = "<td style=\"color:rgb(%s)\">%i</td>" % (color_schema[state_i], state_i+1)
+            state_description = "<td style=\"color:rgb(%s)\">%i</td>" % (color_schema[state_i], state_i + 1)
             # add mean values
-            state_description += ''.join(['<td style="font-size: %i%%;color:#fff;background:%s">%.2f</td>' % (mean/max_v * 100, mean_to_color(mean), mean) for mean in state_means])
+            state_description += ''.join(['<td style="font-size: %i%%;color:#fff;background:%s">%.2f</td>' % (
+                mean / max_v * 100, mean_to_color(mean), mean) for mean in state_means])
             # wrap in tr
             state_description = '<tr>%s</tr>' % state_description
             states_trs.append(state_description)
-
 
         template = """
 <table style="font-size:85%;text-align:center;border-collapse:collapse;border:1px solid #aaa;" cellpadding="5" border="1">
@@ -684,4 +659,4 @@ class PCAClassifier(ClassifierStrategy):
 """
         return template.format(**({'cells_ths': cells_ths,
                                    'states_trs': '\n'.join(states_trs)
-    }))
+                                  }))

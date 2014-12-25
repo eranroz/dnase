@@ -1,12 +1,15 @@
 """
 Score segmentation based on number of genes that fall within domains
+
+To run as a script:
+python -m dnase.model_selection.SegmentedGenesScorer -h
 """
 import numpy as np
 from data_provider import featureLoader
 
 __author__ = 'eranroz'
 
-
+_interactive = False
 def seg_permutation_boundaries(segmentation, num_permutations):
     """
     random permutations for segmentation with [Flase, False, True, False...] etc
@@ -68,6 +71,9 @@ class SegmentedGenesScorer:
         @param segmentation: segmentation to score
         @param resolution: number of bp for bins
         """
+        global _interactive
+        if _interactive:
+            print('Calculating genes break in given segmentation')
 
         vv = np.convolve(segmentation, [1, -1])
         boundaries = np.where(vv)[0]
@@ -75,7 +81,10 @@ class SegmentedGenesScorer:
 
         break_stats = []
         num_permutations = 500
-        for per in seg_permutation_boundaries(segmentation, num_permutations):
+        
+        for per_i, per in enumerate(seg_permutation_boundaries(segmentation, num_permutations)):
+            if _interactive:
+                print('%i/%i permutation'%(per_i, num_permutations))
             break_stats.append(self.calculate_break(per * resolution))
 
         # using cdf of gaussian
@@ -83,13 +92,39 @@ class SegmentedGenesScorer:
         #score = p_func.cdf(breaks)
         # using empirical score
 
-        score = np.sum(break_stats > breaks) / num_permutations
-        print(np.mean(break_stats))
-        print(score)
-        print(breaks)
+        score = np.sum(break_stats > breaks) / float(num_permutations)
+        print('Mean number of genes breaks (contain both open and closed domains) in random permutations: %f'%np.mean(break_stats))
+        print('Min number of genes breaks (contain both open and closed domains) in random permutations: %f'%np.min(break_stats))
+        print('Max number of genes breaks (contain both open and closed domains) in random permutations: %f'%np.max(break_stats))
+
+        print('Number of permutations with more break than segmentation: %f' % score)
+        print('Number of gene breaks in given segmentation: %i' % breaks)
         #import pylab
 
         #pylab.hist(break_stats, bins=20)
         #pylab.show()
 
         return score
+
+
+def main():
+        import argparse
+        from data_provider import SeqLoader
+        global _interactive
+        parser = argparse.ArgumentParser()
+        parser.add_argument('infile', help="input file, a segmentation of the genome")
+        parser.add_argument('chromosome', help="Name of chromosome to evalute")
+        parser.add_argument('resolution', help="Resultion used for the segmentation", type=int)
+        args = parser.parse_args()
+        print(args)
+        print('initing scorer')
+        scorer = SegmentedGenesScorer(args.chromosome)
+        print('loading segmentation file')
+        segmentation = SeqLoader.load_result_dict(args.infile)
+        print('calcing score')
+        _interactive = True
+        print('Segmented genes score: %f' % scorer.score(segmentation[args.chromosome], args.resolution))
+
+
+if __name__ == '__main__':
+	main()

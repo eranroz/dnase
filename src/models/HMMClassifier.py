@@ -3,7 +3,7 @@ Classifies the genome using HMM model.
 """
 import numpy as np
 from data_provider.DiscreteTransformer import DiscreteTransformer
-from dnase.ClassifierStrategy import ClassifierStrategy
+from models.ClassifierStrategy import ClassifierStrategy
 from hmm.HMMModel import HMMModel, ContinuousHMM, DiscreteHMM
 from hmm.bwiter import bw_iter, IteratorCondition
 

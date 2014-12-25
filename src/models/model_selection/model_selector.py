@@ -24,9 +24,9 @@ import numpy as np
 
 from config import DATA_DIR
 from data_provider.DiscreteTransformer import DiscreteTransformer
-from dnase.HMMClassifier import HMMClassifier
-from dnase.model_selection.ConsistencyScorer import ConsistencyScorer
-from dnase.model_selection.MarkerEnrichmentScorer import MarkerEnrichmentScorer
+from models.HMMClassifier import HMMClassifier
+from models.model_selection.ConsistencyScorer import ConsistencyScorer
+from models.model_selection.MarkerEnrichmentScorer import MarkerEnrichmentScorer
 from hmm.HMMModel import DiscreteHMM, ContinuousHMM
 from hmm.bwiter import bw_iter, IteratorCondition
 from hmm.hmt import dwt, HMTModel

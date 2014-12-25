@@ -2,7 +2,7 @@
 Score for segmentation based on consistency between segmentation of different samples of same cell type
 """
 import numpy as np
-from dnase.model_selection.BaseScoreModel import BaseScoreModel
+from models.model_selection.BaseScoreModel import BaseScoreModel
 
 __author__ = 'eranroz'
 

@@ -3,7 +3,7 @@ Score function for signal enrichment within open regions
 """
 import numpy as np
 from data_provider import SeqLoader
-from dnase.model_selection.BaseScoreModel import BaseScoreModel
+from models.model_selection.BaseScoreModel import BaseScoreModel
 
 __author__ = 'eranroz'
 
