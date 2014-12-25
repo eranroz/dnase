@@ -14,7 +14,7 @@ Markov Models for learning the chromatin organization.
 * Create custom UCSC hubs for trained models
 
 # Installation and usage
-The project is written in python 3, with some cython and c in critical code paths. It doesn't have UI but some command line tools.
+The project is written in python 3, with some cython and c in critical code paths. It doesn't have UI, but some command line tools.
 
 Installation:
 * Clone the repository
@@ -23,11 +23,27 @@ Installation:
 > python setup.py build_ext --inplace
 
 * Fill directories with specific project data/external dependencies:
- * data - Create data directory with your data. Recommended public data repository: http://www.ncbi.nlm.nih.gov/epigenomics
+ * data - Create data directory with your data. Recommended public data repositories:
+ **  http://www.ncbi.nlm.nih.gov/epigenomics - roadmap epigenomics
+ ** http://hgdownload.cse.ucsc.edu/goldenPath/ - genome browser
  * bin - fill with UCSC programs such as bedToBigBed, bigWigToBedGraph and wigToBigWig. (can be downloaded for example from http://hgdownload.cse.ucsc.edu/admin/exe/ )
  * results - create a directory for storing results
 
 Data directory as well as results directories may require large disk space, and you may find it convenient to store data or results directories in another drive (ln -s ...). See also [Installation FAQ](#installFaq)
+
+## Getting data
+It is recommended to use rsync for getting data from public repositories. To fetch data (bigWig format) from multiple sources you can use:
+```bash
+	cd src
+	python3 -m data_provider.dataDownloader download_sources *SOURCES_FILE*
+```
+(where *SOURCES_FILE* is a file with links to rsync repositories, each repository in separate line)
+
+The project use compressed numpy arrays (npz format) for storing and manipulating the data.
+```bash
+    python3 -m data_provider.dataDownloader serialize_dir
+```
+To serialize bigWig format to npz format.
 
 ## Usage
 >~"Use the source, Luke" (Obi-Wan Kenobi)
@@ -37,8 +53,9 @@ You are welcome to use the source and extend it. Some common tasks are provided 
  * dataDownloader - Script for downloading and transforming data.
  * createMeanMarkers - Script for averaging different samples from same experiment/same cell type
 * dnase_classify - train and classify chromatin to regions of open and closed
+
 # <a name="installFaq"></a>Installation FAQ
-Here I keep some annoying problems I encountered and their solutions. You are welcome to suggest more :)
+Here I keep some annoying problems I encountered and their solutions. You are welcome to suggest more (you can use issues on github)
 
 In general: since it handles huge files, it is intended to be used by 64-bit environment.
 Using 32-bit environment may cause memory errors or at least slowness.
