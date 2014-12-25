@@ -13,12 +13,12 @@ import os
 import urllib
 import time
 
-from config import DATA_DIR, BIN_DIR, OTHER_DATA, NCBI_DIR, WIG_TO_BIG_WIG, BIG_WIG_TO_BED_GRAPH, CHROM_SIZES
+from config import DATA_DIR, BIN_DIR, OTHER_DATA, SIGNAL_DIR, WIG_TO_BIG_WIG, BIG_WIG_TO_BED_GRAPH, CHROM_SIZES,\
+    RAW_DATA_DIR
 from data_provider import SeqLoader
 
 
 SMOOTHING = 20
-RAW_DATA_DIR = os.path.join(DATA_DIR, 'raw')
 BED_GRAPH_DIR = os.path.join(DATA_DIR, 'bedGraph')
 
 
@@ -41,13 +41,15 @@ def setup_environment():
                    os.path.join(BIN_DIR, tool))
 
 
-def download_data(ignore_files=[]):
+def download_dnase_human_data(ignore_files=None):
     """
     Connects to genboree Epigenome atlas to download specific cell types
     chromatin accessibility experiment results
     @param ignore_files:  files to ignore for example: '01679.DS17212.wig.gz'
     """
     global SMOOTHING
+    if ignore_files is None:
+        ignore_files = []
     epigenome_atlas = ftplib.FTP(host='ftp.genboree.org')
     epigenome_atlas.login()
     epigenome_atlas.cwd('EpigenomeAtlas/Current-Release/experiment-sample/Chromatin_Accessibility/')
@@ -96,7 +98,7 @@ def download_data(ignore_files=[]):
                         print("%s download finished!" % selected_wig)
 
                         # create pickled small smoothed file
-                        pool_process.apply_async(process_file, (selected_wig,))
+                        pool_process.apply_async(serialize_wig_file, (selected_wig,))
                     else:
                         print('Skipping - file already downloaded')
                 if sel_dir != dirs[-1]:
@@ -112,7 +114,7 @@ def download_data(ignore_files=[]):
         print("The data you enter couldn't be parsed as index")
 
 
-def download_ncbi_markers(markers_to_download=None, markers_to_ignore=None,
+def download_ncbi_histone(markers_to_download=None, markers_to_ignore=None,
                           by_experiments_dir='pub/geo/DATA/roadmapepigenomics/by_experiment/'):
     """
     Downloads experiments results from NCBI.
@@ -155,7 +157,63 @@ def download_ncbi_markers(markers_to_download=None, markers_to_ignore=None,
         time.sleep(5)
 
 
-def transform_ncbi(wig_directory=NCBI_DIR):
+def download_from_source(source_path, file_format="bigWig"):
+    """
+    Downloads based on a SOURCE file:
+    *  each line in source contains a rsync directory
+    * It looks for files.txt (if exist) to get metadata on the downloaded files
+    @param file_format: file format to download
+    @param source_path: a path to a SOURCE file to which data will be downloaded
+    @return:
+    """
+    import subprocess
+    import numpy as np
+    import re
+
+    with open(source_path, 'r') as source_file:
+        sources = list(source_file.readlines())
+    local_dir = os.path.dirname(source_path)
+
+    meta_data_keys = ['file']
+    meta_data = np.zeros((0, 1), dtype='S100')
+    meta_file_path = os.path.join(local_dir, 'files.txt')
+    for source in sources:
+        source = source.strip()
+        print('Download {} => {}'.format(source, local_dir))
+        subprocess.call(
+            ["rsync", "-azuP", "--include=*.{}".format(file_format), "--include=files.txt", "--exclude=*", source,
+             local_dir])
+
+        if not os.path.exists(meta_file_path):
+            continue
+        with open(meta_file_path, 'r') as meta_file:
+            for track in meta_file.readlines():
+                # skip non relevant files
+                file_name, file_data = track.split('\t', 1)
+                if not file_name.endswith('.' + file_format):
+                    continue
+                file_keys, file_values = zip(*re.findall('(.+?)=(.+?)[;\n$]', file_data))
+                file_keys = [key.strip() for key in file_keys]
+                new_meta_keys = [key for key in file_keys if key not in meta_data_keys]
+                if any(new_meta_keys):
+                    meta_data_tmp = meta_data
+                    meta_data = np.zeros((meta_data.shape[0], meta_data.shape[1] + len(new_meta_keys)), dtype='S100')
+                    meta_data[:, 0: meta_data_tmp.shape[1]] = meta_data_tmp
+                meta_data_keys += new_meta_keys
+                file_keys = map(lambda k: meta_data_keys.index(k), file_keys)
+                new_row = np.zeros(meta_data.shape[1], dtype='S100')
+                new_row[0] = file_name
+                for meta_key, meta_value in zip(file_keys, file_values):
+                    new_row[meta_key] = meta_value
+
+                meta_data = np.vstack((meta_data, new_row))
+        os.remove(meta_file_path)  # delete the meta file (avoid conflict with other sources)
+    meta_data = np.vstack((meta_data_keys, meta_data))
+    np.savetxt(os.path.join(local_dir, 'metadata.csv'), meta_data, delimiter='\t', fmt="%s")
+    print('Consider to remove incorrect data! use the metadata.csv to find such data...')
+
+
+def transform_ncbi(wig_directory=SIGNAL_DIR):
     """
     Transforms .wig.gz files in wig_directory to pkl files
     @param wig_directory: directory with cell types subdirectories, with wig files
@@ -186,7 +244,7 @@ def process_ncbi_file(wig_file):
     print('end processing %s' % wig_file)
 
 
-def transform_files(directory=DATA_DIR):
+def transform_wig_files(directory=DATA_DIR):
     """
     Transforms wig.gz files to npz files and archives to RAW_DATA_DIR
 
@@ -194,20 +252,50 @@ def transform_files(directory=DATA_DIR):
     """
     pool_process = Pool()
     for f in [f for f in os.listdir(directory) if f.endswith('.wig.gz')]:
-        pool_process.apply_async(process_file, (f, directory))
+        pool_process.apply_async(serialize_wig_file, (f, directory))
     pool_process.close()
     pool_process.join()
 
 
-def process_file(wig_file, directory=DATA_DIR):
+def serialize_wig_file(wig_file, directory=DATA_DIR):
     """
-    pickle it
+    serialize wig file to npz file
     @param directory: directory in which the wig file placed
-    @param wig_file: wig file to pickle
+    @param wig_file: wig file to npz/pickle
     """
     SeqLoader.wig_transform(os.path.join(directory, wig_file), SMOOTHING)
     print(os.path.join(directory, wig_file), '-->', os.path.join(RAW_DATA_DIR, wig_file))
     os.rename(os.path.join(directory, wig_file), os.path.join(RAW_DATA_DIR, wig_file))
+
+
+def serialize_dir(in_directory=RAW_DATA_DIR, out_directory=SIGNAL_DIR, file_type='bigWig'):
+    """
+    Serialize bigwig file to npz file
+
+    @param file_type: file types to serialize
+    @param out_directory: output directory
+    @param in_directory: input directory
+    """
+    import tempfile
+    import subprocess
+
+    if file_type == 'wig':
+        return transform_wig_files()
+    if file_type != 'bigWig':
+        raise NotImplementedError
+
+    for filename in os.listdir(in_directory):
+        if not filename.endswith(file_type):
+            continue
+        src_file = os.path.join(in_directory, filename)
+        dest_file = os.path.join(out_directory, filename.replace('.' + file_type, ''))
+        if os.path.exists(dest_file+'.npz'):
+            continue
+        with tempfile.NamedTemporaryFile('w+', encoding='ascii') as tmp_file:
+            subprocess.call([BIG_WIG_TO_BED_GRAPH, src_file, tmp_file.name])
+            seq = SeqLoader.load_bg(tmp_file.name)
+            SeqLoader.save_result_dict(dest_file, seq)
+    print('Finish')
 
 
 def wig_to_bed_graph(cur_trans):
@@ -264,16 +352,11 @@ def ucsc_download(src_path, target_path=None, email=None):
 
 
 if __name__ == "__main__":
-    operations = {
-        'setupEnvironment': setup_environment,
-        'download': download_data,  # obsolete - instead use rsync and download from NCBI
-        #'transform': transform_files,  # transforms .wig.gz files in DATA_DIR to pickle
-        # 'rawDataToBedGraph': raw_data_to_bed_graph,  # Transforms raw data wig files to bed graph files
-        # 'ncbiMarkers': download_ncbi_markers,  # downloads ncbi markers to OTHER_DATA/markers
-    }
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(help="")
-    parser_download_genome = subparsers.add_parser('download_genome', help='Downloads genome sequence')
+    # downloads genome sequence
+    parser_download_genome = subparsers.add_parser('download_genome',
+                                                   help='Downloads genome sequence from hgdownload.cse.ucsc.edu')
     parser_download_genome.add_argument('directory', help="Directory to store retrived file")
     parser_download_genome.add_argument('--genome', help="Genome to download", default='hg19')
     parser_download_genome.add_argument('--email', help="Email for authentication to UCSC", default='')
@@ -281,10 +364,17 @@ if __name__ == "__main__":
         func=lambda args: ucsc_download(args.directory, "goldenPath/%s/bigZips/%s.2bit" % (args.genome, args.genome),
                                         args.email))
 
+    # utility function for downloading from multiple FTPs
+    parser_download_source = subparsers.add_parser('download_sources',
+                                                   help='Downloads genome sequence from hgdownload.cse.ucsc.edu')
+    parser_download_source.add_argument('source',
+                                        help="A file with each line containing FTP source to download data from")
+    parser_download_source.set_defaults(func=lambda args: download_from_source(args.source))
+
     parser_transform_ncbi = subparsers.add_parser('transform_ncbi',
-                                                  help='Transforms .wig.gz files in NCBI_DIR to pkl files')
+                                                  help='Transforms .wig.gz files in SIGNAL_DIR to pkl files')
     parser_transform_ncbi.add_argument('--directory', help="directory with cell types subdirectories, with wig files",
-                                       default=NCBI_DIR)
+                                       default=SIGNAL_DIR)
     parser_transform_ncbi.set_defaults(func=lambda args: transform_ncbi(args.directory))
 
     parser_download_ncbi_markers = subparsers.add_parser('ncbiMarkers',
@@ -298,10 +388,10 @@ if __name__ == "__main__":
     parser_download_ncbi_markers.add_argument('--by_experiments_dir', help="NCBI directory for downloading experiments",
                                               default="pub/geo/DATA/roadmapepigenomics/by_experiment/")
     parser_download_ncbi_markers.set_defaults(
-        func=lambda args: download_ncbi_markers(args.markers_to_download, args.markers_to_ignore,
+        func=lambda args: download_ncbi_histone(args.markers_to_download, args.markers_to_ignore,
                                                 args.by_experiments_dir))
 
-    raw_data_to_bed_graph_parser = subparsers.add_parser('transform_ncbi',
+    raw_data_to_bed_graph_parser = subparsers.add_parser('raw_to_bed',
                                                          help='Transforms .wig.gz files in NCBI_DIR to pkl files')
     raw_data_to_bed_graph_parser.add_argument('--wig_directory', help="directory with wig files",
                                               default=RAW_DATA_DIR)
@@ -310,31 +400,17 @@ if __name__ == "__main__":
     raw_data_to_bed_graph_parser.set_defaults(func=lambda args: raw_data_to_bed_graph(args.wig_directory,
                                                                                       args.bg_directory))
 
-    wig_to_npz_transform = subparsers.add_parser('transform_ncbi',
+    wig_to_npz_transform = subparsers.add_parser('wig_to_npz',
                                                  help='Transforms .wig.gz files in directory to npz files')
     wig_to_npz_transform.add_argument('--directory', help="directory with wig.gz files to transform",
                                       default=DATA_DIR)
-    wig_to_npz_transform.set_defaults(func=lambda args: transform_files(args.directory))
+    wig_to_npz_transform.set_defaults(func=lambda args: transform_wig_files(args.directory))
+
+    serialize_dir_transform = subparsers.add_parser('serialize_dir',
+                                                    help='Serializes wig.gz/bigWig files to npz')
+    serialize_dir_transform.add_argument('--in_directory', help="Input directory", default=RAW_DATA_DIR)
+    serialize_dir_transform.add_argument('--out_directory', help="Output directory directory", default=SIGNAL_DIR)
+    serialize_dir_transform.set_defaults(func=lambda args: serialize_dir(args.in_directory, args.out_directory))
 
     command_args = parser.parse_args()
     command_args.func(command_args)
-
-    """
-    parser.add_argument('command', help="Support commands: %s" % (', '.join(list(operations.keys()))))
-    parser.add_argument('--experimentsDir', help="Directory in NCBI",
-                        default='pub/geo/DATA/roadmapepigenomics/by_experiment/')
-    parser.add_argument('--experiments', help="Experiments to download", default=None, nargs='*')
-    parser.add_argument('--ignoreExperiments', help="Experiments to ignore", default=['DNase'], nargs='*')
-
-    parser.add_argument('--rawDirectory', help="Directory to store original data files", default=RAW_DATA_DIR)
-    parser.add_argument('--bedGraphDir', help="Destination folder  for transformed bed graph files",
-                        default=BED_GRAPH_DIR)
-
-    args = parser.parse_args()
-    RAW_DATA_DIR = args.rawDirectory
-    BED_GRAPH_DIR = args.bedGraphDir
-    if args.command == 'ncbi_markers':
-        download_ncbi_markers(args.experiments, args.ignoreExperiments, args.experimentsDir)
-    else:
-        operations[args.command]()
-    """
