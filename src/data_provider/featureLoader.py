@@ -4,6 +4,16 @@ All public functions returns dictionary object where the keys are chromosomes an
 """
 import logging
 import re
+import os
+
+try:
+    import urllib.request
+    urlret = urllib.request.urlretrieve
+except:
+    import urllib.urlretrieve
+    urlret = urllib.urlretrieve
+
+from config import DATA_DIR
 
 __author__ = 'eranroz'
 
@@ -64,7 +74,6 @@ def load_hmec_ctcf_peaks():
     loads CTCF signal peaks from HMEC brest tissue
     @return: dict - keys chromosomes and values are signal peaks (values array of start col | end col | value col)
     """
-    import os
     import numpy as np
     from config import OTHER_DATA
 
@@ -84,42 +93,59 @@ def _download_known_genes(known_genes_path):
     Downloads known gene table locally
     @param known_genes_path: path to place known gene table
     """
-    import os
+    from config import GENOME
 
-    try:
-        import urllib.request
-
-        urlret = urllib.request.urlretrieve
-    except:
-        import urllib.urlretrieve
-        urlret = urllib.urlretrieve
     logging.info('known_genes table not found, download from UCSC')
     if not os.path.exists(os.path.dirname(known_genes_path)):
         os.makedirs(os.path.dirname(known_genes_path))
 
-    urlret('http://hgdownload.cse.ucsc.edu/goldenPath/hg19/database/knownGene.txt.gz', known_genes_path)
+    urlret('http://hgdownload.cse.ucsc.edu/goldenPath/{}/database/knownGene.txt.gz'.format(GENOME), known_genes_path)
 
 
-def load_known_genes():
+def load_mapability(kmer=50):
+    from config import GENOME
+    from data_provider import SeqLoader
+
+
+    bigwig_file = 'wgEncodeCrgMapabilityAlign{}mer.bigWig'.format(kmer)
+    cached_path = os.path.join(DATA_DIR, "ucscFiles", bigwig_file)
+    npz_mapability = cached_path.replace('.bigWig', '')
+
+    if not os.path.exists(cached_path):
+        urlret('http://hgdownload.cse.ucsc.edu/gbdb/{}/bbi/{}'.format(GENOME, bigwig_file), cached_path)
+        with tempfile.NamedTemporaryFile('w+', encoding='ascii') as tmp_file:
+            subprocess.call([BIG_WIG_TO_BED_GRAPH, cached_path, tmp_file.name])
+            seq = SeqLoader.load_bg(tmp_file.name)
+            SeqLoader.save_result_dict(npz_mapability, seq)
+    return SeqLoader.load_result_dict(npz_mapability+'.npz')
+
+def load_known_genes(columns=['txStart', 'txEnd'], dtype='int'):
     """
     Loads knownGenes table
 
     @rtype dict
     @return:  keys- chromosomes, values - known genes array (tx start | tx end)
     """
-    import os
-    from config import OTHER_DATA
+    from config import DATA_DIR
     import numpy as np
 
-    known_genes_path = os.path.join(OTHER_DATA, "knownGenes", "knownGenes.txt.gz")
+    known_genes_path = os.path.join(DATA_DIR, "knownGenes", "knownGenes.txt.gz")
     if not os.path.exists(known_genes_path):
         _download_known_genes(known_genes_path)
     #columns:
-    #name	chrom	strand	txStart	txEnd	cdsStart	cdsEnd	exonCount	exonStarts	exonEnds	proteinID	alignID
+    columns_schema = ['name', 'chrom', 'strand', 'txStart', 'txEnd', 'cdsStart', 'cdsEnd', 'exonCount', 'exonStarts', 'exonEnds', 'proteinID', 'alignID']
+    #
     # we skip chromosome such as chr6_apd_hap1
-    known_genes_matrix = np.loadtxt(known_genes_path, delimiter='\t', dtype='int', usecols=(1, 3, 4),
-                                    converters={1: _chr_str_to_index}, comments='#')
+    cols_indics = [columns_schema.index(c) for c in columns]
+    required_converters = {1: _chr_str_to_index}
+    if 'strand' in columns:
+        required_converters[2] = lambda x: 1 if x == b'+' else -1
+    known_genes_matrix = np.loadtxt(known_genes_path, delimiter='\t', dtype=dtype, usecols=[1] + cols_indics,
+                                    converters=required_converters, comments='#')
 
-    dict_vals = dict((_chr_index_to_str(i), known_genes_matrix[known_genes_matrix[:, 0] == i, 1:]) for i in
+    call_mapping = lambda i: _chr_index_to_str(i)
+    if dtype != 'int' :
+        call_mapping = lambda i: _chr_index_to_str(float(i))
+    dict_vals = dict((call_mapping(i), known_genes_matrix[known_genes_matrix[:, 0] == i, 1:]) for i in
                      set(known_genes_matrix[:, 0]))
     return dict_vals
