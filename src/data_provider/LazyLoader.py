@@ -1,5 +1,5 @@
 import numpy as np
-
+from config import GENOME
 __author__ = 'eranroz'
 
 
@@ -13,8 +13,12 @@ class LazyChromosomeLoader(object):
     def __init__(self, loader, chromosomes=None):
         self.loader = loader
         if chromosomes is None:
-            self.chromosomes = ['chr%i' % i for i in np.arange(1, 23)]
-            self.chromosomes += ['chrX', 'chrY']
+            if GENOME == 'hg19':
+                self.chromosomes = ['chr%i' % i for i in np.arange(1, 23)]
+                self.chromosomes += ['chrX', 'chrY']
+            elif GENOME == 'mm9':
+                self.chromosomes = ['chr%i' % i for i in np.arange(1, 20)]
+                self.chromosomes += ['chrX', 'chrY']
         else:
             self.chromosomes = chromosomes
 
