@@ -1,12 +1,12 @@
+from abc import ABCMeta, abstractmethod
+from math import fsum
+import numpy as np
+from scipy.stats import norm as norm_dist
+from collections import namedtuple
+from pyx import _hmmc
 from hmm.multivariatenormal import MultivariateNormal, MixtureModel
 
 __author__ = 'eranroz'
-import scipy.stats
-import numpy as np
-from abc import ABCMeta, abstractmethod
-from collections import namedtuple
-from pyx import _hmmc
-from math import fsum
 
 
 class HMMModel(object):
@@ -70,6 +70,97 @@ class HMMModel(object):
         """
         pass
 
+    def collect_stats(self, seq, bf_output):
+        """
+        Collect statistics based on the expectations, for later use in the maximization step
+        @param seq: observed sequence
+        @param bf_output: backward forward output
+        @return: statistics on transitions, statistics on emission
+        """
+        transition_stats = self._collect_transition_stats(seq, bf_output)
+        emission_stats = self._collect_emission_stats(seq, bf_output.state_p)
+        return transition_stats, emission_stats
+
+    def maximize_using_stats(self, transition_stats, emission_stats):
+        """
+        Use collected statistics to maximize the model.
+        @param transition_stats: statistics of the transitions
+        @param emission_stats: statistics on emission
+        """
+        self._maximize_transition_stats(transition_stats)
+        self._maximize_emission_stats(emission_stats)
+
+    @abstractmethod
+    def _collect_emission_stats(self, seq, gammas):
+        """
+        collects statistics from backward forward iteration (without normalization) about emission
+        @param seq: observation sequence
+        @param gammas: matrix of states to probabilities
+        @return:
+        """
+        pass
+
+    def _maximize_transition_stats(self, transition_stats, prob_w):
+        # == maximize transition ==
+
+        prob_w = np.ones(prob_w.shape[0])  # replace prob_w with ones - all are equal (it is not normalized)
+        transition_stats = np.average(transition_stats, 0, prob_w)
+        transition_stats[1:, 1:] /= np.sum(transition_stats[1:, 1:], 1)[:, None]  # normalize
+        if self.min_alpha is not None:
+            n_states = transition_stats.shape[0] - 1  # minus begin state
+            diagonal_selector = np.eye(n_states, dtype='bool')
+            self_transitions = transition_stats[1:, 1:][diagonal_selector]
+            n_self_transitions = np.maximum(self.min_alpha, self_transitions)
+            # reduce the diff from the rest of transitions equally
+            transition_stats[1:, 1:][~diagonal_selector] -= (n_self_transitions - self_transitions) / (n_states - 1)
+            transition_stats[1:, 1:][diagonal_selector] = n_self_transitions
+
+        # start transition
+        transition_stats[0, 1:] /= np.sum(transition_stats[0, 1:])
+
+        # end transition
+        transition_stats[1:, 0] /= np.sum(transition_stats[1:, 0])
+        # update transition matrix
+        self.state_transition = transition_stats
+
+    @abstractmethod
+    def _maximize_emission_stats(self, emission_stats, prob_w):
+        """
+        collects statistics from backward forward iteration (without normalization) about emission
+        @param emission_stats: statistics for emission of each state
+        @return:
+        """
+        pass
+
+    def _collect_transition_stats(self, seq, bf_output):
+        """
+        collects statistics from backward forward iteration (without normalization) about transitions
+        @param seq: observation sequence
+        @param bf_output: output of backward forward iteration
+        @return:
+        """
+
+        # collect statistics for the transition matrix
+        new_state_transition = self.state_transition.copy()
+        emission = self.get_emission()
+        back_emission_seq = emission[1:, seq].T
+        back_emission_seq *= bf_output.backward / bf_output.scales[:, None]
+
+        new_state_transition[1:, 1:] *= np.dot(bf_output.forward[:-1, :].transpose(), back_emission_seq[1:, :])
+        # we avoid normalization in the collection phase:
+        # new_state_transition[1:, 1:] /= np.sum(new_state_transition[1:, 1:], 1)[:, None]
+
+        # start transition
+        # new_state_transition[0, 1:] = bf_output.state_p[0, :]
+        new_state_transition[0, 1:] *= back_emission_seq[0, :]
+        new_state_transition[0, 1:] /= np.sum(new_state_transition[0, 1:])
+
+        # end transition
+        new_state_transition[1:, 0] = bf_output.forward[-1, :] * back_emission_seq[-1, :] / bf_output.scales[-1]
+        # we normalize it although it is collect stats because there must be one
+        new_state_transition[1:, 0] /= np.sum(new_state_transition[1:, 0])
+        return new_state_transition
+
     def _maximize_transition(self, seq, bf_output):
         """
         part of the maximization step of the EM algorithm (Baum-Welsh)
@@ -81,10 +172,6 @@ class HMMModel(object):
         """
         new_state_transition = self.state_transition.copy()
         emission = self.get_emission()
-        #unique_values = set(seq)
-        #back_emission_seq = np.zeros((len(seq), self.num_states() - 1))
-        #for v in unique_values:
-        #    back_emission_seq[seq == v, :] = emission[1:, v]
         back_emission_seq = emission[1:, seq].T
         back_emission_seq *= bf_output.backward / bf_output.scales[:, None]
 
@@ -101,12 +188,13 @@ class HMMModel(object):
 
         # start transition
         new_state_transition[0, 1:] = bf_output.state_p[0, :]
+        # new_state_transition[0, 1:] *= back_emission_seq[0, 1:]
         new_state_transition[0, 1:] /= np.sum(new_state_transition[0, 1:])
 
         # end transition
         new_state_transition[1:, 0] = bf_output.forward[-1, :] * back_emission_seq[-1, :] / bf_output.scales[-1]
         new_state_transition[1:, 0] /= np.sum(new_state_transition[1:, 0])
-        #update transition matrix
+        # update transition matrix
         self.state_transition = new_state_transition
 
     def maximize(self, seq, bw_output):
@@ -161,13 +249,14 @@ class HMMModel(object):
 
         emission_iterator = iter(emission_seq)
         ptr_iterator = iter(ptr_mat)
-        #intial condition is begin state
+        # initial condition is begin state
         prev = next(emission_iterator) + 1 + np.log(l_state_trans_mat_T[1:, 0])
         next(ptr_iterator)[...] = np.argmax(prev)
         end_state = 0  # termination step
         end_transition = np.log(l_state_trans_mat_T[end_state, 1:])
         l_state_trans_mat_T = np.log(l_state_trans_mat_T[1:, 1:])
-        #recursion step
+
+        # recursion step
         for emission_symbol in emission_iterator:
             p_state_transition = prev + l_state_trans_mat_T
             max_k = np.max(p_state_transition, 1)
@@ -175,8 +264,8 @@ class HMMModel(object):
             prev = emission_symbol + max_k
 
         p_state_transition = prev + end_transition
-        #last_mat = np.max(p_state_transition)
-        #traceback step and without begin state
+
+        # traceback step and without begin state
         most_probable_path = np.zeros(len(symbol_seq), int)
         most_probable_path[-1] = np.argmax(p_state_transition)
 
@@ -185,23 +274,19 @@ class HMMModel(object):
 
         return most_probable_path
 
-    def forward_backward(self, symbol_seq, model_end_state=False):
+    def forward_backward(self, symbol_seq, model_end_state=False, num_stable=False):
         """
         Calculates the probability for the model and each step in it
 
         @param symbol_seq: observed sequence (array). Should be numerical (same size as defined in model)
         @param model_end_state: whether to consider end state or not
-
+        @param num_stable: whether to handle numerical stability by changing inf to max number (may cause slowness)
         Remarks:
         this implementation uses scaling variant to overcome floating points errors.
         """
         n_states = self.num_states()
         emission = self.get_emission()
 
-        #unique_values = set(symbol_seq)
-        #emission_seq = np.zeros((len(symbol_seq), n_states - 1))
-        #for v in unique_values:
-        #    emission_seq[symbol_seq == v, :] = emission[1:, v]
         emission_seq = emission[1:, symbol_seq].T
         state_trans_mat = self.get_state_transition()
         dot = np.dot  # shortcut for performance
@@ -209,19 +294,19 @@ class HMMModel(object):
         real_transitions_T2 = state_trans_mat[1:, 1:].copy(order='C')
 
         # emission * transition
-        e_trans = iter(emission_seq[1:, :, None] * real_transitions_T)
-        forward_iterator = np.nditer([emission_seq, None, None],
+        e_trans = iter(emission_seq[1:, :, np.newaxis] * real_transitions_T)
+        forward_iterator = np.nditer([emission_seq, np.newaxis, np.newaxis],
                                      flags=['external_loop', 'reduce_ok'],
                                      op_flags=[
                                          ['readonly'],
                                          ['readwrite', 'allocate', 'no_broadcast'],
                                          ['readwrite', 'allocate', 'no_broadcast']
-                                     ],
+                                         ],
                                      op_axes=[[-1, 0, 1], [-1, 0, 1], [-1, 0, -1]], order='C')
 
-        #-----	  forward algorithm	  -----
-        #intial condition is begin state (in Durbin there is another forward - the begin = 1)
-        tup = next(forward_iterator)  #emission_i, forward_i,scaling_i
+        # -----	  forward algorithm	  -----
+        # initial condition is begin state (in Durbin there is another forward - the begin = 1)
+        tup = next(forward_iterator)  # emission_i, forward_i,scaling_i
         try:
             tup[1][...] = np.maximum(state_trans_mat[0, 1:] * tup[0], 1e-100)
         except FloatingPointError:
@@ -230,52 +315,57 @@ class HMMModel(object):
         tup[1][...] /= tup[2]
         prev_forward = tup[1]
 
-        summing_arr = np.ones(n_states - 1)
-        #recursion step
-        for tup in forward_iterator:  #emission_i, forward_i,scaling_i
-            prev_forward = dot(next(e_trans), prev_forward)  #== tup[0]*dot(real_transitions_T, prev_forward)
+        # recursion step
+        for tup in forward_iterator:
+            prev_forward = dot(next(e_trans), prev_forward)
 
             # scaling - see Rabiner p. 16, or Durbin p. 79
             scaling = tup[2]
-            #scaling[...] = dot(summing_arr, prev_forward)  # dot is actually faster then np.sum(prev_forward)
             scaling[...] = fsum(prev_forward)  # fsum is more numerical stable
             tup[1][...] = prev_forward = prev_forward / scaling
 
         forward = forward_iterator.operands[1]
         s_j = forward_iterator.operands[2]
-        #end transition
+        # end transition
         log_p_model = np.sum(np.log(s_j))
         if model_end_state:  # Durbin - with end state
             end_state = 0  # termination step
             end_transition = forward[emission_seq.shape[0] - 1, :] * state_trans_mat[1:, end_state]
             log_p_model += np.log(sum(end_transition))
 
-        #-----	backward algorithm	-----
-        #intial condition is end state
+        # backward algorithm
+        # initial condition is end state
         if model_end_state:
             prev_back = (state_trans_mat[1:, 0])  # Durbin p.60
         else:
             prev_back = np.ones(n_states - 1)  # Rabiner p.7 (24)
 
-        backward_iterator = np.nditer([emission_seq[:0:-1], None],  # / s_j[:, None]
+        backward_iterator = np.nditer([emission_seq[:0:-1], np.newaxis],  # / s_j[:, None]
                                       flags=['external_loop', 'reduce_ok'],
                                       op_flags=[['readonly'],
                                                 ['readwrite', 'allocate']],
                                       op_axes=[[-1, 0, 1], [-1, 0, 1]], order='C')
 
-        #recursion step
-        e_trans = iter((emission_seq / s_j[:, None])[:0:-1, None, :] * real_transitions_T2)
-        for tup in backward_iterator:  # emission_i/scale_i, backward_i
-            prev_back = dot(next(e_trans), prev_back, tup[1])  # = dot(real_transitions_T2, prev_back * tup[0])
+        # recursion step
+        e_trans = iter((emission_seq / s_j[:, np.newaxis])[:0:-1, np.newaxis, :] * real_transitions_T2)\
+
+        # keep the scale if we get out of numerical boundaries (may occur if the transition matrix has 0)
+        if num_stable:
+            for tup in backward_iterator:  # emission_i/scale_i, backward_i
+                dot(next(e_trans), prev_back, tup[1])  # = dot(real_transitions_T2, prev_back * tup[0])
+                prev_back = tup[1][...] = np.nan_to_num(prev_back)
+        else:
+            for tup in backward_iterator:  # emission_i/scale_i, backward_i
+                dot(next(e_trans), prev_back, tup[1])  # = dot(real_transitions_T2, prev_back * tup[0])
 
         if model_end_state:
-            backward = np.append(backward_iterator.operands[1][::-1], state_trans_mat[1:, 0][None, :],
+            backward = np.append(backward_iterator.operands[1][::-1], state_trans_mat[1:, 0][np.newaxis, :],
                                  axis=0)  # Durbin p.60
         else:
             backward = np.append(backward_iterator.operands[1][::-1], np.ones((1, n_states - 1)),
                                  axis=0)  # Rabiner p.7 (24)
 
-        #return bf_result
+        # return bf_result
         bf_result = namedtuple('BFResult', 'model_p state_p forward backward scales')
         return bf_result(log_p_model, backward * forward, forward, backward, s_j)
 
@@ -284,6 +374,9 @@ class HMMModel(object):
         Calculates the probability for the model and each step in it
 
         Same as above but with less optimizations. for easier reading
+        @param model_end_state: whether to model the end state
+        @param symbol_seq: sequence of symbols/observations
+
         """
         n_states = self.num_states()
         emission = self.get_emission()
@@ -293,8 +386,8 @@ class HMMModel(object):
         forward = np.zeros((len(symbol_seq), n_states - 1), order='F')  # minus the begin state
         backward = np.zeros((len(symbol_seq), n_states - 1), order='F')
 
-        #-----    forward algorithm   -----
-        #intial condition is begin state (in Durbin there is another forward - the begin = 1)
+        # forward algorithm
+        # initial condition is begin state (in Durbin there is another forward - the begin = 1)
         forward[0, :] = state_trans_mat[0, 1:] * emission[1:, symbol_seq[0]]
         s_j[0] = sum(forward[0, :])
         forward[0, :] /= s_j[0]
@@ -317,26 +410,23 @@ class HMMModel(object):
         next(s_j_iterator)
         next(forward_iterator)
         for sym_emission in emission_iterator:
-            #p_state_transition = np.sum(real_transitions * prev_forward[:, None], 0)
             np.dot(t_real_transitions, prev_forward, p_state_transition)
             prev_forward = sym_emission * p_state_transition
 
             # scaling - see Rabiner p. 16, or Durbin p. 79
             scaling = np.dot(summing_arr, prev_forward)  # dot is actually faster then np.sum(prev_forward)
             next(s_j_iterator)[...] = scaling
-            #s_j[i] = scaling
-            #forward[i, :] = prev_forward = prev_forward / scaling
             next(forward_iterator)[...] = prev_forward = prev_forward / scaling
 
-        #end transition
+        # end transition
         log_p_model = np.sum(np.log(s_j))
         if model_end_state:  # Durbin - with end state
             end_state = 0  # termination step
             end_transition = forward[len(symbol_seq) - 1, :] * state_trans_mat[1:, end_state]
             log_p_model += np.log(sum(end_transition))
 
-        #-----  backward algorithm  -----
-        #intial condition is end state
+        # backward algorithm
+        # initial condition is end state
         if model_end_state:
             prev_back = backward[len(symbol_seq) - 1, :] = (state_trans_mat[1:, 0])  # Durbin p.60
         else:
@@ -346,10 +436,9 @@ class HMMModel(object):
         next(backward_iterator)
         s_j_iterator = iter(s_j[::-1])
 
-        #recursion step
+        # recursion step
         for sym_emission in emission_seq[:0:-1]:
             np.dot(prev_back * sym_emission, t_real_transitions, p_state_transition)
-            #backward[i - 1, :] = prev_back = p_state_transition / s_j[i]  # same scaling as in the forward
             next(backward_iterator)[...] = prev_back = p_state_transition / next(s_j_iterator)
 
         bf_result = namedtuple('BFResult', 'model_p state_p forward backward scales')
@@ -413,7 +502,7 @@ class HMMModel(object):
         else:
             log_p_model = interpolate([forward[len(symbol_seq) - 1, :]])
 
-        #-----  backward algorithm  -----
+        # backward algorithm
         last_index = len(symbol_seq) - 1
         if model_end_state:
             prev_back = backward[last_index, :] = np.log(self.get_state_transition()[1:, 0])
@@ -468,19 +557,30 @@ class DiscreteHMM(HMMModel):
 
      Handles sequences with discrete alphabet
     """
-
-    def _maximize_emission(self, seq, gammas):
-        new_emission_matrix = np.zeros((self.num_states(), self.num_alphabet()))
+    def _collect_emission_stats(self, seq, gammas):
+        new_emission_matrix = np.zeros((self.num_states()-1, self.num_alphabet()))#except begin state
 
         state_p = gammas
         for sym in range(0, self.num_alphabet()):
             where_sym = (seq == sym)
-            new_emission_matrix[1:, sym] = np.sum(state_p[where_sym, :], 0)
+            new_emission_matrix[:, sym] = np.sum(state_p[where_sym, :], 0)
+
+        return new_emission_matrix
+
+    def _maximize_emission_stats(self, emission_stats, prob_w):
+        # normalize
+        prob_w = np.ones(prob_w.shape[0])  # replace to 1 - all equals (non normalized)
+        emission_stats = np.average(emission_stats, 0, prob_w)
+        emission_stats /= np.sum(emission_stats, 1)[:, None]
+        self.emission[1:, :] = emission_stats
+
+    def _maximize_emission(self, seq, gammas):
+        new_emission_matrix = self._collect_emission_stats(seq, gammas)
 
         # normalize
-        new_emission_matrix[1:, :] /= np.sum(new_emission_matrix[1:, :], 1)[:, None]
+        new_emission_matrix /= np.sum(new_emission_matrix, 1)[:, None]
 
-        self.emission = new_emission_matrix
+        self.emission[1:, :] = new_emission_matrix
 
 
 class ContinuousHMM(HMMModel):
@@ -494,7 +594,7 @@ class ContinuousHMM(HMMModel):
     @param mixture_coef: mixture coefficients
     """
 
-    def __init__(self, state_transition, mean_vars, emission_density=scipy.stats.norm, mixture_coef=None,
+    def __init__(self, state_transition, mean_vars, emission_density=norm_dist, mixture_coef=None,
                  min_alpha=None):
         emission = _ContinuousEmission(mean_vars, emission_density, mixture_coef)
         super().__init__(state_transition, emission, min_alpha=min_alpha)
@@ -506,7 +606,6 @@ class ContinuousHMM(HMMModel):
             state_norm = np.sum(gammas, 0)
             mu = np.sum(gammas * seq[:, None], 0) / state_norm
             old_mu = self.emission.mean_vars[1:, 0]
-            #sym_min_mu = np.power(seq[:, None] - mu, 2)
             sym_min_mu = np.power(seq[:, None] - old_mu, 2)
             std = np.sqrt(np.sum(gammas * sym_min_mu, 0) / state_norm)
 
@@ -554,7 +653,7 @@ class _ContinuousEmission():
     Emission for continuous HMM.
     """
 
-    def __init__(self, mean_vars, dist=scipy.stats.norm, mixture_coef=None):
+    def __init__(self, mean_vars, dist=norm_dist, mixture_coef=None):
         """
         Initializes a new continuous distribution states.
         @param mean_vars: np array of mean and variance for each state
@@ -579,7 +678,6 @@ class _ContinuousEmission():
             for mean_var, mixture in zip(self.mean_vars, self.mixtures):
                 try:
                     mix_pdf = [self.dist_func(mean, var).pdf for mean, var in mean_var]
-                    #mix = lambda x: _ContinuousEmission.mixture_pdf(mix_pdf, mixture, x)
                     mix = partial(_ContinuousEmission.mixture_pdf, mix_pdf, mixture)
 
                     if np.abs(np.sum(mixture) - 1) > 1e-6:
@@ -662,8 +760,62 @@ class GaussianHMM(HMMModel):
         emission = _GaussianEmission(mean_vars, mixture_coef)
         super().__init__(state_transition, emission, min_alpha=min_alpha)
 
+    def _collect_emission_stats(self, seq, gammas):
+        state_norm = np.sum(gammas, 0)
+        mean_vars = []
+        mixture_coeff = []
+        for state in np.arange(0, self.num_states() - 1):
+            is_mixture = len(self.emission.mixtures[state]) > 1
+            if is_mixture:
+                emissions = self.emission.components_emission(state, seq)
+                sum_emissions = np.sum(emissions, 0)
+                emissions /= sum_emissions[:, None]  # normalize
+                gamma_state = emissions * gammas[:, state][:, None]
+                del emissions
+                mixture_coeff.append(sum_emissions/np.sum(sum_emissions))
+            else:
+                gamma_state = gammas[:, state][:, None]
+                mixture_coeff.append([1])
+
+            covars_mixture = []
+            new_means = np.dot(seq, gamma_state).T  # avoid normalization by state_norm[state]).T
+            for mixture_i, mixture in enumerate(self.emission.mixtures[state]):
+                gamma_c = gamma_state[:, mixture_i]
+                old_mean = self.emission.mean_vars[state][mixture_i][0]
+                seq_min_mean = seq - old_mean.T
+                new_cov = np.dot((seq_min_mean * gamma_c), seq_min_mean.T)  # avoid normalization by state_norm[state])
+                covars_mixture.append(new_cov)
+            mean_vars.append((new_means, covars_mixture))
+
+        return mean_vars, mixture_coeff, state_norm
+
+    def _maximize_emission_stats(self, emissions_stats, prob_w):
+        prob_w = np.ones_like(prob_w)  # we use non normalized terms(normalizinig by state_norms)
+        # extract means and covariances
+        mean_vars, mixture_coeff, state_norms = zip(*emissions_stats)
+        state_norms = np.sum(state_norms, 0)
+        # extract mixture coefficents
+        mixture_coeff = np.array(mixture_coeff)
+        new_mixcoeff = []
+        min_std = 0.5  # np.finfo(float).eps  #1e-5 #
+        new_mean_vars = []
+        for state in np.arange(0, self.num_states() - 1):
+            new_mixcoeff.append(np.average(mixture_coeff[:, state], 0, prob_w))
+
+            mix_mean_covar = [mean_var_i[state] for mean_var_i in mean_vars]
+            mean_state_i, covar_state_i = zip(*mix_mean_covar)
+
+            mean_state_i = np.average(mean_state_i, 0, prob_w)[0]/state_norms[state]
+            covar_state_i = np.average(covar_state_i, 0, prob_w)[0]/state_norms[state]
+
+            # the diagonal must be large enough
+            np.fill_diagonal(covar_state_i, np.maximum(covar_state_i.diagonal().copy(), min_std))
+            new_mean_vars.append([(mean_state_i, covar_state_i)])
+
+        self.emission = _GaussianEmission(new_mean_vars, new_mixcoeff)
+
     def _maximize_emission(self, seq, gammas):
-        min_std = np.finfo(float).eps  #1e-5 #
+        min_std = 0.5  # np.finfo(float).eps  #1e-5 #
         state_norm = np.sum(gammas, 0)
         mean_vars = []
         mixture_coeff = []
@@ -688,12 +840,8 @@ class GaussianHMM(HMMModel):
 
                 seq_min_mean = seq - old_mean.T
                 new_cov = np.dot((seq_min_mean * gamma_c), seq_min_mean.T) / state_norm[state]
-                #if np.any(new_cov < 0):
-                #    new_cov = np.maximum(new_cov, 0)
-                #new_cov = np.sqrt(new_cov)
                 # the diagonal must be large enough
                 np.fill_diagonal(new_cov, np.maximum(new_cov.diagonal().copy(), min_std))
-                #if is_mixture:
                 covars_mixture.append(new_cov)
             mean_vars.append(list(zip(new_means, covars_mixture)))
 
@@ -714,12 +862,12 @@ class GaussianHMM(HMMModel):
     def __str__(self):
         # handelding mixtures isn't handled currently
         means = np.array([x[0][0] for x in self.emission.mean_vars])
-        vars = np.array([x[0][1].diagonal() for x in self.emission.mean_vars])
+        covars = np.array([x[0][1].diagonal() for x in self.emission.mean_vars])
 
         str_rep = 'GMM. Means:\n'
         str_rep += np.array_str(means, precision=2, suppress_small=True, max_line_width=250).replace('\n\n', '\n')
         str_rep += '\nDiagonals for covariance matrices:\n'
-        str_rep += np.array_str(vars, precision=2, suppress_small=True, max_line_width=250).replace('\n\n', '\n')
+        str_rep += np.array_str(covars, precision=2, suppress_small=True, max_line_width=250).replace('\n\n', '\n')
         str_rep += '\nStates transitions% (begin not shown):\n'
         str_rep += np.array_str(100*(self.state_transition[1:, 1:]), precision=1, suppress_small=True,
                                 max_line_width=250)
@@ -812,4 +960,107 @@ class _GaussianEmission():
         self.states, self.pseudo_states = self._set_states()
 
     def __str__(self):
-        return 'Mean\t Var\n %s'% str(self.mean_vars)
+        return 'Mean\t Var\n %s' % str(self.mean_vars)
+
+
+class MultinomialHMM(HMMModel):
+    """
+    A multinomial HMM supporting multiple features
+    @param state_transition: transition matrix between states
+    @param emission_matrix: n X m X k matrix, n - state, m - feature , k - emission for char k
+    @param min_alpha:
+    """
+    def __init__(self, state_transition, emission_matrix, min_alpha=None):
+        emission = MultinomialEmission(emission_matrix)
+        self.num_features = emission_matrix.shape[1]
+        super().__init__(state_transition, emission, min_alpha=min_alpha)
+
+    def _maximize_emission(self, seq, gammas):
+        """
+        num_features = seq.shape[1]
+        alphabet_size = self.emission.states_prob.shape[2]
+        new_emission_matrix = np.zeros((self.num_states(), num_features, alphabet_size))
+
+        state_p = gammas
+        for feature in range(seq.shape[1]):
+            for sym in range(0, alphabet_size):
+                where_sym = (seq[:, feature] == sym)
+                new_emission_matrix[1:, feature, sym] = np.sum(state_p[where_sym, :], 0)
+
+        # normalize
+        new_emission_matrix[1:, :, :] /= np.sum(new_emission_matrix[1:, :, :], -1)[:, :, np.newaxis]
+
+        self.emission = MultinomialEmission(new_emission_matrix)
+        """
+        emission_stats = self._collect_emission_stats(seq, gammas)
+        self._maximize_emission_stats(emission_stats)
+
+    def _collect_emission_stats(self, seq, gammas):
+        num_features = seq.shape[1]
+        alphabet_size = self.emission.states_prob.shape[2]
+        new_emission_matrix = np.zeros((self.num_states(), num_features, alphabet_size))
+
+        state_p = gammas
+        for feature in range(seq.shape[1]):
+            for sym in range(0, alphabet_size):
+                where_sym = (seq[:, feature] == sym)
+                new_emission_matrix[1:, feature, sym] = np.sum(state_p[where_sym, :], 0)
+
+        return new_emission_matrix
+
+    def _maximize_emission_stats(self, emission_stats, prob_w):
+        # normalize
+        prob_w = np.ones(prob_w.shape[0])  # replace to 1 - all equals (non normalized)
+        emission_stats = np.average(emission_stats, 0, prob_w)
+        emission_stats[1:, :, :] /= np.sum(emission_stats[1:, :, :], -1)[:, :, np.newaxis]
+        self.emission = MultinomialEmission(emission_stats)
+
+    def num_alphabet(self):
+        return self.emission.states_prob.shape[1]*self.emission.states_prob.shape[2]
+
+    def viterbi(self, symbol_seq):
+        """
+        Find the most probable path through the model
+
+        Dynamic programming algorithm for decoding the states.
+        Implementation according to Durbin, Biological sequence analysis [p. 57]
+
+        @param symbol_seq: observed sequence (array). Should be numerical (same size as defined in model)
+        """
+        emission_seq = np.log(self.get_emission()[1:, symbol_seq]).T
+        return _hmmc.viterbi(emission_seq, self.state_transition)
+
+
+class MultinomialEmission():
+    """
+    MultinomialEmission assumes multinomial distribution e.g (n!/(n1!n2!))*(p1)^n1*(p2)^n2...
+    """
+    def __init__(self, states_prob):
+        """
+        initializes a new instance of MultinomialEmission
+        @param states_prob: a matrix of nxmxk where n - number of states and m-feature index, k -emission for char k
+        """
+        self.states_prob = states_prob
+
+    def __getitem__(self, item):
+        """
+        Get emission for state
+        @param item:  first index is state (or slice for all states),
+                      second is value or matrix of values [observations x features]
+        @return: p according to pdf
+        """
+        min_p = np.finfo(float).eps
+        if isinstance(item[0], int):
+            features_prob = self.states_prob[item[0], :, item[1]]
+            p = np.prod(features_prob, -1)
+        else:
+
+            # features_prob = self.states_prob[:, :, item[1]]
+            # p = np.prod(features_prob, -1)
+            features_prob = []
+            for f in range(self.states_prob.shape[1]):
+                features_prob.append(self.states_prob[item[0], f, item[1][:, f]])
+            p = np.prod(features_prob, 0)
+        p = np.maximum(p, min_p)
+        return p
+
