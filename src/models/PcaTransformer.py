@@ -47,7 +47,7 @@ class PcaTransformer(object):
         return np.dot(reduced, self.w)+self.mu
 
     def __call__(self, *args, **kwargs):
-        data_centered = args[0] - self.mu[:, None]  # np.mean(args[0], 1)[:, None]
+        data_centered = args[0] - self.mu[:, np.newaxis]  # np.mean(args[0], 1)[:, None]
         pca_matrix = np.dot(self.w, data_centered)
         return pca_matrix
 
