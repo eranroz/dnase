@@ -6,21 +6,27 @@
  */
 
 #include <stdio.h>
-
+#include <string.h>
 class BgParser {
 
 public:
 	BgParser():m_fd(NULL){}
 	bool init(const char* filename){
 		m_fd = fopen(filename, "r");
+		m_PrevChrom[0] = '\0';
 		return m_fd != NULL;
 	}
 
 	/**
 	Reads next line
 	*/
-	bool read_next(char* chrom, int *start, int* end, float* score) { 
-		return fscanf(m_fd, "%s\t%d\t%d\t%f",chrom, start, end, score) != EOF;
+	bool read_next(char* chrom, unsigned int *start, unsigned int* end, float* score, bool* newChrom) {
+		bool isEof = fscanf(m_fd, "%s\t%d\t%d\t%f",chrom, start, end, score) != EOF;
+		*newChrom = strcmp(chrom, m_PrevChrom)!=0;
+		if(*newChrom){
+			strcpy(m_PrevChrom, chrom);
+		}
+		return isEof;
 	}
 
 	void close(){
@@ -31,6 +37,7 @@ public:
 
 private:
 	FILE *m_fd;
+	char m_PrevChrom[50];
 };
 
 

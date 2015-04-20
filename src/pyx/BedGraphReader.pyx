@@ -20,7 +20,7 @@ cdef extern from "BgParser.cpp":
 	cdef cppclass BgParser:
 		BgParser()
 		bool init(const char* filename)
-		bool read_next(char* chrom, int* a,int* b, float* c)
+		bool read_next(char* chrom, unsigned int* a, unsigned int* b, float* c, bool* is_new_chrom)
 		void close()
 	cdef cppclass BedWriter:
 		BedWriter()
@@ -32,7 +32,7 @@ def load_bedgraph(infile, chrom_size_file, bin_size=20):
 	"""
 	Loads bed graph. Bed graph must be with valid size chrom sizes and with no header
 	"""
-	return loadfile(infile, chrom_size_file)
+	return loadfile(infile, chrom_size_file, bin_size)
 
 def write_bed(chromDict, bin_size not None, outfile, color_schema=None):
 	"""
@@ -56,56 +56,90 @@ def write_bed(chromDict, bin_size not None, outfile, color_schema=None):
 
 @cython.boundscheck(False)
 @cython.profile(False)
-cdef loadfile(infile, dict chrom_sizes, int bin_size=20):
+@cython.cdivision(True)
+cdef loadfile(infile, dict chrom_sizes, unsigned int bin_size=20):
 	cdef BgParser Parser
-	cdef int start,end  # for each line
+	cdef unsigned int start,end  # for each line
 	cdef float score
 	cdef float cache_score=0
-	cdef int cache_start
-	cdef int i=0  # temp variable
-	cdef int curr_chrom_size = 0
-	cdef bytes byt = infile.encode()
+	cdef unsigned int cache_start, end_cache
+	cdef unsigned int start_bin_size, cache_start_bin_size
+	cdef unsigned int i=0  # temp variable
+	cdef unsigned int curr_chrom_size = 0
+	cdef bytes file_name = infile.encode()
 	cdef np.ndarray[DTYPE_t, ndim=1] chrom_data = np.zeros([1], dtype=DTYPE)
 	
 	cdef string curr_chrom
-	if not Parser.init(byt):
+	if not Parser.init(file_name):
 		raise Exception("Error opening file")
 
 	chrom_dict = dict()
 
 	cdef bytes last_chrom = b""
 	cdef char* curr_chromC="chr1X"
+	cdef bool newChrom
 	try:
-		while(Parser.read_next(curr_chromC, &start, &end, &score)):
-			if last_chrom!=curr_chromC:
+		while(Parser.read_next(curr_chromC, &start, &end, &score, &newChrom)):
+			#if last_chrom!=curr_chromC:
+			if newChrom:
 				if last_chrom!=b"":
 					if VERBOSE:
 						print('Read %s'%last_chrom.decode('UTF-8'))
-					if cache_start!=curr_chrom_size:
-						chrom_data[cache_start] = cache_score
+					if cache_score!=0:
+						if cache_start_bin_size==chrom_data.shape[0]:
+							chrom_data[cache_start_bin_size-1] += cache_score/bin_size
+						else:
+							chrom_data[cache_start_bin_size] = cache_score/bin_size
 						cache_score = 0
 					chrom_dict[last_chrom.decode('UTF-8')] = chrom_data
 				last_chrom = curr_chromC
+				
 				curr_chrom_size = chrom_sizes[curr_chromC.decode('UTF-8')]
 				chrom_data = np.zeros([curr_chrom_size], dtype=DTYPE)
-				cache_start = curr_chrom_size  # invalidate
+				curr_chrom_size *= bin_size
+				curr_chrom_size += bin_size # give extra bin size to avoid overflow
+				cache_start = 0  # invalidate
+				cache_start_bin_size = 0
+				cache_score = 0
 
-			start = start/bin_size
-			end = end/bin_size
-			if start > cache_start:
-				chrom_data[cache_start] = cache_score
-				cache_score = 0 
-				cache_start = curr_chrom_size  # invalidate
-			if end == start:
-				cache_score += score
-				cache_start = start
+			# check if cache maintance required
+			if cache_score:
+				# place the cache in chrom_data, or update it
+				if (start/bin_size)!=cache_start_bin_size:
+					chrom_data[cache_start_bin_size] = cache_score/bin_size
+					cache_score = 0
+				else:
+					if end/bin_size == start/bin_size:
+						cache_score += (end-start)
+					else:
+						end_cache = start-start%bin_size+bin_size
+						chrom_data[cache_start_bin_size] = (cache_score+score*float(end_cache-start))/bin_size
+						cache_score = 0
+						start = end_cache
+			
+			if (end-start) >= bin_size:
+				if cache_score:
+					chrom_data[start/bin_size] = cache_score/bin_size
+					cache_score = 0
+				else:
+					chrom_data[start/bin_size] = score
+					
+				for i in range((start/bin_size)+1, end/bin_size):
+					chrom_data[i] = score
 
+				cache_score = score*(end%bin_size)
+				cache_start = end-end%bin_size
+				cache_start_bin_size = cache_start/bin_size
+			else:
+				if cache_score == 0:
+					cache_score = score*(end-start) # score*num of bp in cache
+					cache_start = start
+					cache_start_bin_size = cache_start/bin_size
 			if end > curr_chrom_size:
-				raise IndexError("Invalid position encountered %i>%i for chrom %s" % (end*bin_size,curr_chrom_size, last_chrom) )
-			for i in range(start, end):
-				chrom_data[i] = score
-		if cache_start != curr_chrom_size:
-			chrom_data[cache_start] = cache_score
+				raise IndexError("Invalid position encountered %i>%i for chrom %s" % (end,curr_chrom_size, last_chrom) )
+
+		if cache_score:
+			chrom_data[cache_start_bin_size] = cache_score
 		chrom_dict[last_chrom.decode('UTF-8')] = chrom_data
 	except:
 		Parser.close()
