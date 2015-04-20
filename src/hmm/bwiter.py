@@ -82,7 +82,7 @@ class DiffCondition():
             return True
 
 
-def bw_iter(symbol_seq, initial_model=None, stop_condition=IteratorCondition(3)):
+def bw_iter(symbol_seq, initial_model=None, stop_condition=3, constraint_func=None):
     """
     Estimates model parameters using Baum-Welch algorithm
 
@@ -96,6 +96,8 @@ def bw_iter(symbol_seq, initial_model=None, stop_condition=IteratorCondition(3))
     new_model = deepcopy(initial_model)
     if isinstance(stop_condition, int):
         stop_condition = IteratorCondition(stop_condition)
+    elif stop_condition is None:
+        stop_condition = DiffCondition(100)
 
     prob = float('-inf')
     print('Press ctrl+C for early termination of Baum-Welch training')
@@ -108,6 +110,59 @@ def bw_iter(symbol_seq, initial_model=None, stop_condition=IteratorCondition(3))
                 print(time.time()-bef)
             prob = bw_output.model_p
             new_model.maximize(symbol_seq, bw_output)
+            if constraint_func is not None:
+                constraint_func(new_model)
+    except KeyboardInterrupt:
+        print('Early termination of EM training')
+
+    return new_model, prob
+
+
+def bw_iter_multisequence(sequences, initial_model=None, stop_condition=3, constraint_func=None):
+    """
+    Estimates model parameters using Baum-Welch algorithm
+
+    @rtype : tuple(HMMModel, int)
+    @param sequences: observations
+    @param initial_model: Initial guess for model parameters
+    @type initial_model: C{ContinuousHMM} or C{DiscreteHMM} or C{GaussianHMM}
+    @param stop_condition: Callable like object/function that takes probability as parameter
+    @return: HMM model estimation
+    """
+    new_model = deepcopy(initial_model)
+    if isinstance(stop_condition, int):
+        stop_condition = IteratorCondition(stop_condition)
+    elif stop_condition is None:
+        stop_condition = DiffCondition(100)
+
+    prob = float('-inf')
+    print('Press ctrl+C for early termination of Baum-Welch training')
+    try:
+        while stop_condition(prob):
+            if _time_profiling:
+                bef = time.time()
+            transition_stats, emissions_stats = [], []
+            prob = []
+            for seq in sequences:
+                bw_output = new_model.forward_backward(seq)
+                if np.isnan(bw_output.model_p):
+                    print('Numerical stability issue')
+                    continue
+                transition_stats_seq, emission_stats_seq = new_model.collect_stats(seq, bw_output)
+                transition_stats.append(transition_stats_seq)
+                emissions_stats.append(emission_stats_seq)
+                prob.append(bw_output.model_p)
+
+            if _time_profiling:
+                print(time.time()-bef)
+
+            prob = np.array(prob)
+            new_model._maximize_transition_stats(transition_stats, prob)
+            new_model._maximize_emission_stats(emissions_stats, prob)
+            prob = np.sum(prob)
+            if constraint_func:
+                constraint_func(new_model)
+
     except KeyboardInterrupt:
         print('Early termination of EM training')
 
