@@ -392,8 +392,8 @@ class HMMModel(object):
         s_j[0] = sum(forward[0, :])
         forward[0, :] /= s_j[0]
         prev_forward = forward[0, :]
-        #recursion step
-        #transform to emission array
+        # recursion step
+        # transform to emission array
         unique_values = set(symbol_seq)
         emission_seq = np.zeros((len(symbol_seq), n_states - 1))
         for v in unique_values:
@@ -479,10 +479,10 @@ class HMMModel(object):
 
         l_state_transition = np.log(self.get_state_transition()[1:, 1:])
         l_t_state_transition = l_state_transition.transpose()
-        #-----    forward algorithm   -----
-        #intial condition is begin state (in Durbin there is another forward - the begin = 1)
+        # forward algorithm
+        # initial condition is begin state (in Durbin there is another forward - the begin = 1)
         prev_forward = forward[0, :] = np.log(self.get_state_transition()[0, 1:]) + l_emission[:, symbol_seq[0]]
-        #recursion step
+        # recursion step
         emission_seq = list(enumerate([l_emission[:, s] for s in symbol_seq]))
 
         for i, sym_emission in emission_seq:
@@ -539,7 +539,7 @@ class HMMModel(object):
             states_trs.append('<tr>%s</tr>' % state_description)
 
         template = """
-<table style="font-size:85%;text-align:center;border-collapse:collapse;border:1px solid #aaa;"  cellpadding="5" border="1">
+<table style="font-size:85%;text-align:center;border-collapse:collapse;border:1px solid #aaa;" cellpadding="5" border="1">
 <tr style="font-size:larger; font-weight: bold;">
     <th>State/Cell</th>
     {cells_ths}
@@ -558,7 +558,7 @@ class DiscreteHMM(HMMModel):
      Handles sequences with discrete alphabet
     """
     def _collect_emission_stats(self, seq, gammas):
-        new_emission_matrix = np.zeros((self.num_states()-1, self.num_alphabet()))#except begin state
+        new_emission_matrix = np.zeros((self.num_states()-1, self.num_alphabet()))  # except begin state
 
         state_p = gammas
         for sym in range(0, self.num_alphabet()):
@@ -1016,6 +1016,11 @@ class MultinomialHMM(HMMModel):
         self.emission = MultinomialEmission(emission_stats)
 
     def num_alphabet(self):
+        """
+        Number of symbols in alphabet based on teh defined emission (in all the features)
+
+        @return:
+        """
         return self.emission.states_prob.shape[1]*self.emission.states_prob.shape[2]
 
     def viterbi(self, symbol_seq):

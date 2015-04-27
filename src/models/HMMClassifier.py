@@ -141,8 +141,9 @@ class HMMClassifier(ClassifierStrategy):
             hmm_type = 'Discrete'
         elif isinstance(self.model, ContinuousHMM):
             hmm_type = 'Continuous'
-        return "{hmm_type} HMM classifier. Decoding: {decode_algorithm}. {num_states} states".format(**({
-        'hmm_type': hmm_type,
-        'decode_algorithm': 'EM' if self.output_p else 'viterbi',
-        'num_states': self.model.num_states()
-    }))
+        return "{hmm_type} HMM classifier. Decoding: {decode_algorithm}. {num_states} states".format(**(
+            {
+                'hmm_type': hmm_type,
+                'decode_algorithm': 'EM' if self.output_p else 'viterbi',
+                'num_states': self.model.num_states()
+            }))

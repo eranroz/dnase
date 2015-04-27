@@ -60,9 +60,9 @@ def naive_approch():
     ax.set_xticks([])
 
     ax = plt.subplot(gs[2])
-    from dnase import dnase_classifier
+    from models import chromatin_classifier
 
-    model = dnase_classifier.load('Discrete500-a[0.000, 0.000000]')
+    model = chromatin_classifier.load('Discrete500-a[0.000, 0.000000]')
 
     plt.title('Naive (1kb)')
     smoothed = np.array([transform(SeqLoader.down_sample(data, ds) / ds)] * ds).T.reshape(1, size)
@@ -79,14 +79,18 @@ def hmm_approch():
     data = get_data()
     data = np.log(data + 1)
     size = 1000
-    start = 12000
+    start = 1200#13100 #12000
     data = data[start - size / 2:start + size / 2]
+    data[0:100] *= 0.8
+    #data[135:140] += 1.4
+    #data[495:500] *= 1.2
+    data[550:560] *= 1.2
     percentiles_values = np.percentile(data, q=[70, 100])
-    transform = DiscreteTransformer([70])
+    transform = DiscreteTransformer([72])
 
     x = np.arange(size)
     plt.figure(figsize=(16, 8))
-    gs = matplotlib.gridspec.GridSpec(4, 1, height_ratios=[6, 1, 1, 1], hspace=0)
+    gs = matplotlib.gridspec.GridSpec(5, 1, height_ratios=[6, 1, 1, 1, 1], hspace=0)
     ax = plt.subplot(gs[0])
     prev_v = 0
     colors = ['#ffff00', '#ff0000', '#ff0000', '#ff0000']
@@ -97,9 +101,9 @@ def hmm_approch():
     plt.plot(x, data, '-', alpha=0.8, label='100b')
     ds = 10
 
-    plt.plot(np.arange(0, size, ds), SeqLoader.down_sample(data, ds) / ds, '-*', alpha=0.8, label='1kb')
-    plt.annotate('noise??', xy=(215, 2.6), arrowprops=dict(arrowstyle='->'), xytext=(210, 4), size='large')
-    plt.annotate('smooth??', xy=(340, 4), arrowprops=dict(arrowstyle='->'), xytext=(420, 5), size='large')
+    plt.plot(np.arange(0, size, ds), SeqLoader.down_sample(data, ds) / ds, '-', alpha=0.8, label='1kb')
+    plt.annotate('noise??', xy=(200, 1.8), arrowprops=dict(arrowstyle='->'), xytext=(200, 1), size='large')
+    plt.annotate('smooth??', xy=(348, 3.2), arrowprops=dict(arrowstyle='->'), xytext=(320, 5), size='large')
     #plt.scatter(x, data, c='b')
     plt.axis((0, size, 0, np.max(data)))
     plt.legend(loc='upper right')
@@ -116,9 +120,9 @@ def hmm_approch():
     ax.set_xticks([])
 
     ax = plt.subplot(gs[2])
-    from dnase import dnase_classifier
+    from models import chromatin_classifier
 
-    model = dnase_classifier.load('Discrete500-a[0.000, 0.000000]')
+    model = chromatin_classifier.load('Discrete500-a[0.000, 0.000000]')
 
     plt.title('Naive (1kb)')
     smoothed = np.array([transform(SeqLoader.down_sample(data, ds) / ds)] * ds).T.reshape(1, size)
@@ -126,13 +130,22 @@ def hmm_approch():
     plt.imshow(smoothed, cmap=colors_n, extent=[0, size, 0, 20])  # , aspect='auto'  #matplotlib.cm.hsv
     ax.set_yticks([])
     ax.set_xticks([])
-
+    # HMM - on raw data
     ax = plt.subplot(gs[3])
     plt.title('HMM')
     transform = DiscreteTransformer()
     classification = next(model.classify([{'x': transform(data)}]))['x']
     colors_n = matplotlib.colors.ListedColormap(colors)
     plt.imshow(np.array([classification]), cmap=colors_n, extent=[0, size, 0, 20])
+    ax.set_yticks([])
+    ax.set_xticks([])
+    # HMM on smoothed data
+    ax = plt.subplot(gs[4])
+    plt.title('HMM (smoothed 200bp)')
+    transform = DiscreteTransformer()
+    classification = next(model.classify([{'x': transform(SeqLoader.down_sample(data, 2))}]))['x']
+    colors_n = matplotlib.colors.ListedColormap(colors)
+    plt.imshow(np.array([classification]*2).T.reshape(1, size), cmap=colors_n, extent=[0, size, 0, 20])
     ax.set_yticks([])
     ax.set_xticks([])
 
@@ -142,4 +155,4 @@ def hmm_approch():
 
 
 hmm_approch()
-naive_approch()
+#naive_approch()

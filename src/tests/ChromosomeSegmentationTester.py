@@ -3,8 +3,8 @@ from unittest import TestCase
 import unittest
 import sys
 
-from dnase import ChromosomeSegmentation
-from dnase.ChromosomeSegmentation import SegmentationFeatures
+from models import ChromosomeSegmentation
+from models.ChromosomeSegmentation import SegmentationFeatures
 import numpy as np
 
 __author__ = 'eranroz'
@@ -67,12 +67,12 @@ class TestChromosomeSegmentation(TestCase):
         self.assertTrue(True)
 
     def mean_length(self):
-        from dnase import dnase_classifier
+        from models import chromatin_classifier
         #from matplotlib.pylab import plt
         from matplotlib import pyplot as plt
 
         resolution = 500
-        model = dnase_classifier.load('Discrete500-a[0.000, 0.000000]')
+        model = chromatin_classifier.load('Discrete500-a[0.000, 0.000000]')
         genome = ChromosomeSegmentation.load('fetal_brain', model)
         open_lengths = []
         closed_lengths = []
@@ -93,14 +93,25 @@ class TestChromosomeSegmentation(TestCase):
         # my histogram
         fig, ax = plt.subplots(figsize=(10, 8))
 
-        bins = np.arange(0, 700, 5)
-        plt.hist([open_lengths, closed_lengths], bins=bins, histtype='stepfilled', label=['Open', 'Closed'], alpha=0.7)
+        #bins = np.arange(0, 700, 5)
+
+        #bins = 80#np.arange(3.1, 5, 0.01)
+        bins = np.arange(2.5, 6.2, 0.03)
+
+        #plt.hist([(open_lengths), (closed_lengths)], bins=bins, histtype='stepfilled', label=['Open', 'Closed'], alpha=0.7)
+        open_lengths_log = np.log10(np.array(open_lengths)*500)
+        closed_lengths = np.log10(np.array(closed_lengths)*500)
+        plt.hist([open_lengths_log, closed_lengths], bins=bins, histtype='stepfilled', label=['Open', 'Closed'], alpha=0.7)
         plt.legend()
+        #plt.loglog()
         plt.yscale('log', nonposy='clip')
         plt.title('Domains length')
         plt.xlabel('Domain length')
         plt.ylabel('#')
-        ax.set_xticklabels(['%ikb' % x for x in ax.get_xticks() / 2])
+        #ax.set_xticklabels(['%ikb' % x for x in ax.get_xticks() / 2])
+        from matplotlib.ticker import FormatStrFormatter
+        #ax.set_xticklabels(['%.2f bp' % x for x in ax.get_xticks()])
+        ax.xaxis.set_major_formatter(FormatStrFormatter('$10^{%.1f}$ bp'))
         plt.tight_layout()
         plt.show()
 

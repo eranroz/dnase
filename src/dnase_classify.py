@@ -12,9 +12,9 @@ import argparse
 
 from config import BED_GRAPH_RESULTS_DIR
 import data_provider.DiscreteTransformer
-from dnase import dnase_classifier
-from dnase.HMMClassifier import HMMClassifier
-from dnase.dnase_classifier import DNaseClassifier
+from models import chromatin_classifier
+from models.HMMClassifier import HMMClassifier
+from models.chromatin_classifier import DNaseClassifier
 from hmm.HMMModel import DiscreteHMM, ContinuousHMM
 from data_provider import SeqLoader
 
@@ -118,7 +118,7 @@ def classify_discrete(in_file='UW.Fetal_Brain.ChromatinAccessibility.H-22510.DS1
     strategy = HMMClassifier(model)
     strategy.output_p = output_p
     #strategy.trainChm = ['chr1']
-    classifier = dnase_classifier.DNaseClassifier(strategy)
+    classifier = chromatin_classifier.DNaseClassifier(strategy)
     print('Training model')
     model_name = os.path.join(BED_GRAPH_RESULTS_DIR,
                               '%s.Discrete%s.model' % (model_name or in_file, str(resolution)))
@@ -210,18 +210,18 @@ def main():
         print('Wartning: input file includes file and resolution extensions')
 
     output_path = args.output or os.path.basename(args.infile)
-    if model_name is None or not dnase_classifier.model_exist(model_name):
+    if model_name is None or not chromatin_classifier.model_exist(model_name):
         is_discrete = args.model_type[0].upper() == 'D'
         if model_name is None:
             model_name = '%s%i-a[%.3f, %3f]' % (
                 'Discrete' if is_discrete else 'Continuous', resolution, min_alpha[0], min_alpha[1])
         strategy = HMMClassifier.default(is_discrete, min_alpha)
         strategy.output_p = args.posterior  # viterbi or posterior
-        classifier = dnase_classifier.DNaseClassifier(strategy, resolution, model_name)
+        classifier = chromatin_classifier.DNaseClassifier(strategy, resolution, model_name)
         classifier.fit_file(args.infile)
         classifier.save()  # create directory for the model
     else:
-        classifier = dnase_classifier.load(model_name)
+        classifier = chromatin_classifier.load(model_name)
     classifier.save_classify_file(args.infile, output_path, save_raw=args.output_raw, save_bg=args.output_seg_bg)
 
     #classify_continuous(in_file=args.infile, output_p=args.posterior, model_name=args.model, out_file=args.output)

@@ -12,6 +12,8 @@ from config import MODELS_DIR, DATA_DIR, MEAN_DNASE_DIR, PUBLISH_URL_PATH_MODELS
 from data_provider import SeqLoader
 from data_provider.LazyLoader import LazyChromosomeLoader
 from data_provider.data_publisher import publish_dic
+from data_provider import featureLoader
+from hmm.bwiter import IteratorCondition
 from html_utils import table_to_html_heatmap, list_to_ol
 
 __author__ = 'eranroz'
@@ -51,7 +53,7 @@ def model_exist(model_name):
     return os.path.exists(os.path.join(model_dir(model_name), _model_file_name))
 
 
-class DNaseMetaClassifier(object):
+class ChromatinMetaClassifier(object):
     """
     Meta class for classifiers: mono classifier, multichannel classifier etc.
     """
@@ -133,7 +135,7 @@ class DNaseMetaClassifier(object):
         return self.model_dir("segmentation.npz")
 
 
-class DNaseClassifier(DNaseMetaClassifier):
+class DNaseClassifier(ChromatinMetaClassifier):
     """
     Classifier for active and non-active areas in chromatin based on DNase data for a single sequence
     """
@@ -208,7 +210,7 @@ class DNaseClassifier(DNaseMetaClassifier):
         return data
 
 
-class DNaseMultiChannelClassifier(DNaseMetaClassifier):
+class DNaseMultiChannelClassifier(ChromatinMetaClassifier):
     """
     Classifier for multichannel
 
@@ -224,7 +226,7 @@ class DNaseMultiChannelClassifier(DNaseMetaClassifier):
         # it seems that sparse matrix aren't required as num zeros is about 3% (chromosome 8, all cell types)
         # in resolution of 1000bp
         self.sparse = False
-        super().__init__(strategy, resolution, name)
+        super(DNaseMultiChannelClassifier, self).__init__(strategy, resolution, name)
 
     def _load_multichannel_data(self, directory=MEAN_DNASE_DIR, chromosomes=None):
         """
@@ -388,19 +390,19 @@ which includes:
 {training_files}
 
 """.format(**({
-            'model_name': self.name,
-            'url_models_dir': PUBLISH_URL_PATH_MODELS,
-            'resolution': '%ibp' % self.resolution,
-            'training_dir': training_dir,
-            'training_files': training_files,
-            'num_training': str(len(training_files_raw)),
-            'pca_dims': str(pca.w.shape[0]),
-            'strategy_str': str(self),
-            'pca_table': pca_table,
-            'mean_states': self.strategy.states_html(input_labels=training_files_raw),
-            'html_state_transition': self.strategy.model.html_state_transition(),
-            'covariance_states': covariance_states
-               }))
+                                           'model_name': self.name,
+                                           'url_models_dir': PUBLISH_URL_PATH_MODELS,
+                                           'resolution': '%ibp' % self.resolution,
+                                           'training_dir': training_dir,
+                                           'training_files': training_files,
+                                           'num_training': str(len(training_files_raw)),
+                                           'pca_dims': str(pca.w.shape[0]),
+                                           'strategy_str': str(self),
+                                           'pca_table': pca_table,
+                                           'mean_states': self.strategy.states_html(input_labels=training_files_raw),
+                                           'html_state_transition': self.strategy.model.html_state_transition(),
+                                           'covariance_states': covariance_states
+                                       }))
         return readme_content
 
     def readme(self, training_dir, pca, likelihoods):
@@ -447,16 +449,16 @@ output parameters:
 Recovery of states using inverse PCA
 {mean_states}
 """.format(**({
-                   'training_dir': training_dir,
-                   'training_files': '\n'.join(training_files),
-                   'num_training': str(len(training_files)),
-                   'pca_dims': str(pca.w.shape[0]),
-                   'strategy_str': str(self),
-                   'pca_str': np.array_str(pca.w, precision=2, suppress_small=True,
-                                           max_line_width=250).replace('\n\n', '\n'),
-                   'mean_states': np.array_str(mean_states, precision=2, suppress_small=True,
-                                               max_line_width=250).replace('\n\n', '\n')
-              }))
+                                           'training_dir': training_dir,
+                                           'training_files': '\n'.join(training_files),
+                                           'num_training': str(len(training_files)),
+                                           'pca_dims': str(pca.w.shape[0]),
+                                           'strategy_str': str(self),
+                                           'pca_str': np.array_str(pca.w, precision=2, suppress_small=True,
+                                                                   max_line_width=250).replace('\n\n', '\n'),
+                                           'mean_states': np.array_str(mean_states, precision=2, suppress_small=True,
+                                                                       max_line_width=250).replace('\n\n', '\n')
+                                       }))
         with open(self.model_dir("readme.txt"), 'w') as readme:
             readme.write(readme_content)
 
@@ -476,3 +478,181 @@ Recovery of states using inverse PCA
         plt.ylabel('cell type')
         plt.tight_layout()
         plt.savefig(self.model_dir("states.png"))
+
+
+class MultiExpClassifier(ChromatinMetaClassifier):
+    """
+    A classifier of multiple experiments, such as different ChIP-Seqs, DNase etc.
+    """
+
+    def __init__(self, strategy, resolution=1000, name=None, experiments=None):
+        # assign default name for the model
+        if name is None:
+            name = 'MultiExp%i%s' % (resolution, strategy.name())
+
+        # whether to use sparse matrix representation during calculations
+        # it seems that sparse matrix aren't required as num zeros is about 3% (chromosome 8, all cell types)
+        # in resolution of 1000bp
+        self.sparse = False
+        self.experiments = experiments  # experiments used to define the features in the data
+        self.train_chromosome = 'chr8'  # chromosome used for training
+        super(MultiExpClassifier, self).__init__(strategy, resolution, name)
+
+    def fit(self, data, stop_condition=IteratorCondition(10), filter_non_mappable=True):
+        """
+        Fits the model before actually running it
+        @param filter_non_mappable: filter non mappable regions from the training
+        @param stop_condition: converge condition to stop fitting (default: 10 iterations)
+        @param data: training sequence for the Baum-Welch (EM)
+        @return tuple(likelihood, fit_params)
+        """
+        training_seqs = data[self.train_chromosome]
+        sequence_axis = np.argmax([training_seqs.shape[0], training_seqs.shape[1]])
+
+        # break based on mappability
+        if filter_non_mappable:
+            min_run_size = 100
+            min_mappability = 0.7
+            mappability_orig_resolution = 20
+            mappability_scale = self.resolution // mappability_orig_resolution
+            mappability = featureLoader.load_mapability()[self.train_chromosome]
+            mappability = SeqLoader.down_sample(mappability, mappability_scale) * (1.0/mappability_scale)
+            mappability_slices = np.ma.clump_masked(np.ma.masked_greater_equal(mappability, min_mappability))
+            if sequence_axis == 0:
+                mappable_splits = [training_seqs[chuck, :] for chuck in mappability_slices if
+                                   chuck.stop - chuck.start > min_run_size]
+            else:
+                mappable_splits = [training_seqs[:, chuck] for chuck in mappability_slices if
+                                   chuck.stop - chuck.start > min_run_size]
+            training_seqs = mappable_splits
+        else:
+            training_seqs = [training_seqs]
+
+        p, fit_params = self.strategy.fit(training_seqs, stop_condition)
+        return p, fit_params
+
+    def html_description(self, training_files, features, data):
+        """
+        Get textual description of the model
+        @param data: same of the data used for creating features
+        @param features: name of the features used (order similar to order in data)
+        @param training_files: files used for training the model
+        """
+        training_files.sort()  # determinism...
+        training_files = list_to_ol(training_files)
+
+        readme_content = """
+Multinomial HMM strategy.<br/>
+<b>Resolution:</b> {resolution}
+
+<div style="float:right">
+<h3>State transition</h3>
+{html_state_transition}
+</div>
+
+<h3>States meaning</h3>
+{mean_states}
+
+<br style="clear:both;"/>
+<img src="{url_models_dir}/{model_name}/tss states.png" />
+
+<img src="{url_models_dir}/{model_name}/tes states.png" />
+<!-- The strategy can represent the meaning based on parameters, image representation and so on -->
+
+<h3>Pre-processing</h3>
+{pre-processing_html}
+
+<div style="text-align:center;">
+States heatmap:<br>
+<img src="{url_models_dir}/{model_name}/states_regions.png"/>
+</div>
+
+<div style="text-align:center;">
+Number of states in genome:<br>
+<img src="{url_models_dir}/{model_name}/states-genome-pie.png"/>
+</div>
+
+<h3> Model parameters </h3>
+<ol>
+<li> State transition parameters (see above)</li>
+<li> (kernel) Emission parameters (see below)</li>
+</ol>
+
+<h4>Training output</h4>
+output parameters:
+<pre style="background:#EEE;">
+{strategy_str}
+</pre>
+
+<h4>EM converge</h4>
+The following graph shows the convergence of the model in terms of log likelihood for the model describing the training
+data compared to number of iterations:
+<div style="text-align:center;">
+<img src="{url_models_dir}/{model_name}/em-training.png"/>
+</div>
+
+<h3>Training data</h3>
+{training_data}
+""".format(**({
+                                           'model_name': self.name,
+                                           'url_models_dir': PUBLISH_URL_PATH_MODELS,
+                                           'resolution': '%ibp' % self.resolution,
+                                           'pre-processing_html': self.strategy.preprocessing_html(data,
+                                                                                                   input_labels=features,
+                                                                                                   model_name=self.name),
+                                           'strategy_str': str(self),
+                                           'mean_states': self.strategy.states_html(input_labels=features),
+                                           'html_state_transition': self.strategy.model.html_state_transition(),
+                                           'training_data': training_files
+                                       }))
+        return readme_content
+
+    def readme(self, training_files, likelihoods):
+        """
+        Creates an organized readme to describe the model and its training details
+        @param likelihoods: array of likelihoods during fit
+        @param training_files: files used to train the model
+        """
+        import matplotlib
+
+        matplotlib.use('Agg')
+        from matplotlib import pyplot as plt
+        # add readme
+        training_files.sort()  # determinism...
+        training_files = ['\t %3i. %s' % (cell_i, cell_type.replace('.npz', '')) for cell_i, cell_type
+                          in enumerate(training_files)]
+
+        readme_content = """
+=Multinomial model model=
+===Training data===
+{training_files}
+
+== Model parameters ==
+
+{strategy_str}
+
+""".format(**({
+                                           'training_files': '\n'.join(training_files),
+                                           'strategy_str': str(self)
+                                       }))
+        with open(self.model_dir("readme.txt"), 'w') as readme:
+            readme.write(readme_content)
+
+        # some plots!
+        # plot likelihood vs iterations (did we converge? probably yes...)
+        plt.plot(likelihoods)
+        plt.title('Likelihood for model')
+        plt.ylabel('log likelihood')
+        plt.xlabel('iterations')
+        plt.savefig(self.model_dir('em-training.png'))
+
+        # plot states
+        # TODO: nice graphics...
+
+    def classify_data(self, data):
+        """
+        Use the strategy to classify data
+        @param data: data to be classified (dictionary like, keys are chromosome names, values are data array)
+        @return:
+        """
+        return self.strategy.classify(data)
