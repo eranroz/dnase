@@ -4,10 +4,11 @@ This script analyzes the boundary of regions
 import argparse
 import os
 import numpy as np
+from config import MEAN_MARKERS, MEAN_DNASE_DIR
 from data_provider import SeqLoader
-from dnase import dnase_classifier
-from dnase import ChromosomeSegmentation
-from dnase.ChromosomeSegmentation import SegmentationFeatures
+from models import chromatin_classifier
+from models import ChromosomeSegmentation
+from models.ChromosomeSegmentation import SegmentationFeatures
 
 __author__ = 'eranroz'
 
@@ -65,8 +66,15 @@ def heatmap_boundary(model_name):
     # matplotlib.use('Agg')
     from matplotlib import pyplot as plt
 
-    model = dnase_classifier.load(model_name)
+    model = chromatin_classifier.load(model_name)
+    #cell_type = 'brain_fetal'
     cell_type = 'IMR90_cell_line'
+    #cell_type = 'pancreas'
+    #/cs/stud/eranroz/dnase/data/data/heart_fetal/GSM530654_UW.Fetal_Heart.ChromatinAccessibility.H-22662.DS12531.20.pkl
+    from config import SIGNAL_DIR
+    #segmentation = next(model.classify_file(os.path.join(NCBI_DIR, 'heart_fetal', 'GSM530654_UW.Fetal_Heart.ChromatinAccessibility.H-22662.DS12531.20.pkl')))
+    segmentation = next(model.classify_file(os.path.join(MEAN_DNASE_DIR, '%s.mean.npz' % cell_type)))
+    #segmentation = None  # for debug
     #chromosome = 'chr7'
     model_resolution = model.resolution
     orig_resolution = 20
@@ -75,7 +83,7 @@ def heatmap_boundary(model_name):
     interesting_area /= orig_resolution  # use same resolution as orig resolution
     # start, length, openclosed
     regions_data_dict = dict()
-    segmentation_cell_type = ChromosomeSegmentation.load(cell_type, model)
+    segmentation_cell_type = ChromosomeSegmentation.load(cell_type, model, segmentation=segmentation)
     for chromosome, segmentation_cell_type in segmentation_cell_type.items():
         regions_data = segmentation_cell_type.get(
             [SegmentationFeatures.Position, SegmentationFeatures.RegionLengths, SegmentationFeatures.OpenClosed])
@@ -83,16 +91,16 @@ def heatmap_boundary(model_name):
         regions_data[:, [0, 1]] *= model_resolution / orig_resolution  # translate to resolution of signals (20bp)
         regions_data[:, 1] += regions_data[:, 0]  # replace length by end position
         if chromosome != 'chrM':
-            #if chromosome == 'chr1':  # for debug
+        #if chromosome == 'chr12':  # for debug
             regions_data_dict[chromosome] = regions_data
 
     # load experiments
     experiments = list(SeqLoader.available_experiments(cell_type).keys())
-    #experiments = experiments[:5]  # for debug
+    #experiments = experiments[:3]  # for debug
     open_region = 1
     closed_region = 0
-    states = ["closed"]  # , "open"]
-    states_codes = [closed_region]  # ,open_region ]
+    states = ["open"]  #, "closed"
+    states_codes = [open_region]  # , ]
 
     ex_to_state_to_freq = dict()
     # for debug only open regions
@@ -101,9 +109,15 @@ def heatmap_boundary(model_name):
 
     np.seterr(all='raise')
     n_chromosomes = len(regions_data_dict.keys())
+    experiments = experiments + ['DNase']
     for ex_i, ex in enumerate(experiments):
         # experiment data
-        experiment_data_all_chrom, _ = SeqLoader.load_experiments(cell_type, [ex], chromosomes=regions_data_dict.keys())
+        if ex != 'DNase':
+            experiment_data_all_chrom, _ = SeqLoader.load_experiments(cell_type, [ex],
+                                                                      chromosomes=regions_data_dict.keys())
+        else:
+            experiment_data_all_chrom = SeqLoader.load_result_dict(
+                os.path.join(MEAN_DNASE_DIR, '%s.mean.npz' % cell_type))
         print('%s %i/%i' % (ex, ex_i + 1, len(experiments)))
         for region_type in states_codes:
             inside = np.zeros((n_chromosomes, 100))
@@ -112,7 +126,10 @@ def heatmap_boundary(model_name):
             chromosomes_w = np.zeros(n_chromosomes)
             chrom_i = 0
             for chrom, regions_data in regions_data_dict.items():
-                experiment_data = np.array(experiment_data_all_chrom[chrom])[0, :]
+                if ex == 'DNase':
+                    experiment_data = experiment_data_all_chrom[chrom]
+                else:
+                    experiment_data = np.array(experiment_data_all_chrom[chrom])[0, :]
 
                 # extract position and length from regions
                 region_data_subtype = regions_data[regions_data[:, 2] == region_type, 0:2]
@@ -145,70 +162,84 @@ def heatmap_boundary(model_name):
             }
 
     # visualizations
-    plot_lines = []
     if not os.path.exists(model.model_dir("enrichments")):
         os.makedirs(model.model_dir("enrichments"))
 
 
 
     #experiments = (np.array(experiments)[experiments_to_show]).tolist()
-    f, axarr = plt.subplots(1, 3, sharey=True, figsize=(16, 5))
-    plt.subplots_adjust(wspace=0, top=0.85, left=0.03, right=0.98)
-    experiments_to_show = experiments
-    for state_i, state in zip(states_codes, states):
-        #experiments_to_show = np.array([np.average(ex_to_state_to_freq[state_i][ex]['inside'])/np.average(ex_to_state_to_freq[state_i][ex]['left_side']) for ex in experiments])
-        #print(experiments_to_show)
-        #experiments_to_show = np.array(experiments)[np.where((experiments_to_show > 1.20) | (experiments_to_show < 0.8))[0]]
-        #plt.figure()
-        #plt.suptitle('%s enrichment' % ex)
+    for plt_i in [0, 1, 2]:
+        if plt_i == 0:
+            # all
+            experiments_to_show = experiments
+            experiments_to_show.remove('DNase')
+            experiments_to_show.sort()
+            experiments_to_show.insert(0, 'DNase')
+        elif plt_i == 1:
+            # only dnase
+            experiments_to_show = ['DNase']
+        elif plt_i == 2:
+            # only the most important
+            experiments_to_show = ['DNase', 'H3K27me3', 'H3K36me3', 'H3K9ac', 'H3K4me3', 'H3K9me3']
+            experiments_to_show = [ex for ex in experiments_to_show if ex in experiments]
 
 
-        #f.set_size_inches(20.5, 1.5)
+        for state_i, state in zip(states_codes, states):
+            plot_lines = []
 
-        axLeft, axInside, axRight = axarr
-        ax = axLeft
-        #ax = plt.subplot(2, 3, (state_i*3))#axLeft
-        #plt.title('Left')
-        #plt.suptitle('%s histone enrichment' % state)
-        #ax.set_title
-        if len(plot_lines) == 0:
-            for ex in experiments_to_show:
-                #for state_i, state in zip(states_codes, states):
-                plot_lines.append(
-                    ax.plot(np.arange(interesting_area), ex_to_state_to_freq[state_i][ex]['left_side'])[0])
-        else:
-            for ex in experiments_to_show:
-                #for state_i, state in zip(states_codes, states):
-                ax.plot(np.arange(interesting_area), ex_to_state_to_freq[state_i][ex]['left_side'])
+            #print(experiments_to_show)
+            #experiments_to_show = np.array(experiments)[np.where((experiments_to_show > 1.20) | (experiments_to_show < 0.8))[0]]
+            #plt.figure()
+            #plt.suptitle('%s enrichment' % ex)
+            f, axarr = plt.subplots(1, 3, sharey=True, figsize=(16, 5))
+            plt.subplots_adjust(wspace=0, top=0.85, left=0.03, right=0.98)
 
-        ax.set_xticklabels(
-            ['%ikb' % (x / 1000) for x in np.arange(-interesting_area, 0, 100, dtype=int) * orig_resolution])
-        ax.set_xticks(np.arange(0, interesting_area, 100))
-        #ax.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
-        ax = axInside
-        #ax = plt.subplot(2, 3, (state_i*3)+1)
-        #for state_i, state in zip(states_codes, states):
-        for ex in experiments_to_show:
-            ax.plot(np.arange(100), ex_to_state_to_freq[state_i][ex]['inside'], label=state)
-        ax.set_xticks(np.arange(0, 100, 20))
-        ax.set_xticklabels(['%i%%' % x for x in np.arange(0, 100, 20)])
+            #f.set_size_inches(20.5, 1.5)
 
-        ax = axRight
-        #ax = plt.subplot(2, 3, (state_i*3)+2)
-        #plt.title('Right')
-        #for state_i, state in zip(states_codes, states):
-        for ex in experiments_to_show:
-            ax.plot(np.arange(interesting_area), ex_to_state_to_freq[state_i][ex]['right_side'], label=state)
-        ax.set_xticklabels(
-            ['%ikb' % (x / 1000) for x in np.arange(0, interesting_area, 100, dtype=int) * orig_resolution])
-        ax.set_xticks(np.arange(0, interesting_area, 100))
-    f.legend(plot_lines, experiments_to_show, loc='upper center', ncol=8, fontsize='small')
+            axLeft, axInside, axRight = axarr
+            ax = axLeft
+            if plt_i == 0:
+                markers = ['.', 'o', 'v', 'x', 'd']
+                linewidth = 0
+            else:
+                markers = [None]
+                linewidth = 2
+            if len(plot_lines) == 0:
+                for ex_i, ex in enumerate(experiments_to_show):
+                    #for state_i, state in zip(states_codes, states):
+                    plot_lines.append(
+                        ax.plot(np.arange(interesting_area), ex_to_state_to_freq[state_i][ex]['left_side'],
+                                linewidth=linewidth, marker=markers[ex_i % len(markers)])[0])
+            else:
+                for ex in experiments_to_show:
+                    #for state_i, state in zip(states_codes, states):
+                    ax.plot(np.arange(interesting_area), ex_to_state_to_freq[state_i][ex]['left_side'])
 
-    #plt.tight_layout()
-    #plt.savefig(model.model_dir('enrichments/%sEnrichment.png' % ex))
+            ax.set_xticklabels(
+                ['%ikb' % (x / 1000) for x in np.arange(-interesting_area, 0, 100, dtype=int) * orig_resolution])
+            ax.set_xticks(np.arange(0, interesting_area, 100))
+            #ax.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+            ax = axInside
+            for ex_i, ex in enumerate(experiments_to_show):
+                ax.plot(np.arange(100), ex_to_state_to_freq[state_i][ex]['inside'], label=state, linewidth=linewidth,
+                        marker=markers[ex_i % len(markers)])
+            ax.set_xticks(np.arange(0, 100, 20))
+            ax.set_xticklabels(['%i%%' % x for x in np.arange(0, 100, 20)])
 
-    plt.show()
+            ax = axRight
+            for ex_i, ex in enumerate(experiments_to_show):
+                ax.plot(np.arange(interesting_area), ex_to_state_to_freq[state_i][ex]['right_side'], label=state,
+                        linewidth=linewidth, marker=markers[ex_i % (1 if plt_i == 0 else len(markers))])
+            ax.set_xticklabels(
+                ['%ikb' % (x / 1000) for x in np.arange(0, interesting_area, 100, dtype=int) * orig_resolution])
+            ax.set_xticks(np.arange(0, interesting_area, 100))
+            f.legend(plot_lines, experiments_to_show, loc='upper center', ncol=8)#, fontsize='small' if len(experiments_to_show)>4 else 'medium')
+            #plt.tight_layout()
+            if plt_i == 2:
+                plt.savefig(model.model_dir('enrichments/%sEnrichment-%s.png' % (state, cell_type)))
 
+    #plt.show()
+    print('finished')
 
 if __name__ == "__main__":
     commands = {

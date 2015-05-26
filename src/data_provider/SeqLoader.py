@@ -103,7 +103,7 @@ def wig_transform(wig_file, smoothing=100, output=True):
     return written_dict
 
 
-def chrom_sizes():
+def chrom_sizes(bin_sizes=20):
     """
     Get chromosome sizes of hg19 as dictionary
     @rtype : dict
@@ -111,7 +111,7 @@ def chrom_sizes():
     """
     with open(CHROM_SIZES) as chrom_size_fd:
         chromosomes = (r.split('\t') for r in chrom_size_fd.readlines())
-    chrom_dict = dict(((chrom[0], int(chrom[1]) // 20) for chrom in chromosomes))
+    chrom_dict = dict(((chrom[0], int(chrom[1]) // bin_sizes) for chrom in chromosomes))
     return chrom_dict
 
 
